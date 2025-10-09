@@ -1,0 +1,185 @@
+---
+title: "New Breadth Annotations"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+library(Matrix)
+library(plyr)
+library(dplyr)
+library(readxl)
+library(Seurat) 
+library(sctransform)
+library(igraph)
+#library(factoextra)
+# library(EpicTools) 
+library(ComplexHeatmap)
+library(circlize)
+#require(Hmisc)
+#require(dplyr)
+library(openxlsx)
+#require(ggplot2)
+library(ggpubr)
+library(ggplot2)
+library(cowplot)
+library(data.table)
+#library(topGO)
+#library(RColorBrewer)
+#library(ALL)
+#library(SingleR)
+#library(scater)
+#library(pheatmap)
+library(nichenetr)
+library(tidyverse)
+#library(readr)
+#library(flextable)
+#library(FlexDotPlot)
+#library(phateR)
+#library(scales)
+#library(SeuratWrappers)  
+#library(ggsci)
+#library(UpSetR)
+#library(plotly)
+#library(pROC)
+library(SingleCellExperiment)
+#library(glue)
+#library(ggExtra)
+#library(monocle3)
+library(EnhancedVolcano)
+library(STRINGdb)
+library(NatParksPalettes)
+library(MoMAColors)
+library(MetBrewer)
+library(viridis)
+library(BioNet)
+library(network)
+library(sna)
+library(intergraph)
+library(ggraph)
+library(tidygraph)
+library(reticulate)
+#library(phateR)
+library(magrittr)
+#library(CytoGLMM)
+library(DESeq2)
+library(ComplexUpset)
+library(CytoTRACE2)
+library(PNWColors)
+#library(readxl)
+library(multinichenetr)
+library(patchwork)
+library(reticulate)
+library(anndata)
+```
+
+```{r}
+
+#Seurat Object from Wilk et al. 2021.
+covidall = readRDS(file = "covid_combined.rds")
+#no duplicates
+covidall <- subset(covidall, subset = Donor != "28205-0564d0")
+covidall <- subset(covidall, subset = Donor != "28205-0555d0")
+#This donor dodn't have plamsa
+covidall <- subset(covidall, subset = Donor != "EC003")
+
+```
+
+
+```{r}
+#labels for neutralization score and individual viruses
+neutralization_table = read_xlsx("Source_Data_Figure_1.xlsx")
+neutralization_table$Breadth = mapvalues(neutralization_table$Score, from = c(0, 1, 2, 3, 4), to = c("Narrow","Narrow","Narrow","Narrow","Broad"))
+
+#broad vs narrow
+#broad is score 4-5 narrow is 0-3
+broad = subset(neutralization_table, neutralization_table$Breadth == "Broad") 
+narrow = subset(neutralization_table, neutralization_table$Breadth == "Narrow") 
+
+#WT vs non
+WT = subset(neutralization_table, neutralization_table$WT == "WT Neutralizer") 
+nonWT = subset(neutralization_table, neutralization_table$WT == "Non-Neutralizer") 
+
+#Alpha vs non
+Alpha = subset(neutralization_table, neutralization_table$Alpha == "Alpha Neutralizer") 
+nonAlpha = subset(neutralization_table, neutralization_table$Alpha == "Non-Neutralizer") 
+
+#Beta vs non
+Beta = subset(neutralization_table, neutralization_table$Beta == "Beta Neutralizer") 
+nonBeta = subset(neutralization_table, neutralization_table$Beta == "Non-Neutralizer") 
+
+#Delta vs non
+Delta = subset(neutralization_table, neutralization_table$Delta == "Delta Neutralizer") 
+nonDelta = subset(neutralization_table, neutralization_table$Delta == "Non-Neutralizer") 
+
+#Omicron vs non
+Omicron = subset(neutralization_table, neutralization_table$Omicron == "Omicron Neutralizer") 
+nonOmicron = subset(neutralization_table, neutralization_table$Omicron == "Non-Neutralizer") 
+
+#breadth score
+zero = subset(neutralization_table, neutralization_table$Score == 0) 
+one = subset(neutralization_table, neutralization_table$Score == 1) 
+two = subset(neutralization_table, neutralization_table$Score == 2) 
+three = subset(neutralization_table, neutralization_table$Score == 3) 
+four = subset(neutralization_table, neutralization_table$Score == 4) 
+five = subset(neutralization_table, neutralization_table$Score == 5) 
+```
+
+
+```{r}
+#assign labels to seurat object
+covidall$Breadth = "Healthy"
+covidall$Breadth[covidall$Donor %in% broad$Donor] = "Broad"
+covidall$Breadth[covidall$Donor %in% narrow$Donor] = "Narrow"
+
+covidall$WT = "Healthy"
+covidall$WT[covidall$Donor %in% WT$Donor] = "WT Neutralizer"
+covidall$WT[covidall$Donor %in% nonWT$Donor] = "Non-Neutralizer"
+
+covidall$Alpha = "Healthy"
+covidall$Alpha[covidall$Donor %in% Alpha$Donor] = "Alpha Neutralizer"
+covidall$Alpha[covidall$Donor %in% nonAlpha$Donor] = "Non-Neutralizer"
+
+covidall$Beta = "Healthy"
+covidall$Beta[covidall$Donor %in% Beta$Donor] = "Beta Neutralizer"
+covidall$Beta[covidall$Donor %in% nonBeta$Donor] = "Non-Neutralizer"
+
+covidall$Delta = "Healthy"
+covidall$Delta[covidall$Donor %in% Delta$Donor] = "Delta Neutralizer"
+covidall$Delta[covidall$Donor %in% nonDelta$Donor] = "Non-Neutralizer"
+
+covidall$Omicron = "Healthy"
+covidall$Omicron[covidall$Donor %in% Omicron$Donor] = "Omicron Neutralizer"
+covidall$Omicron[covidall$Donor %in% nonOmicron$Donor] = "Non-Neutralizer"
+
+covidall$Score = "Healthy"
+covidall$Score[covidall$Donor %in% zero$Donor] = 0
+covidall$Score[covidall$Donor %in% one$Donor] = 1
+covidall$Score[covidall$Donor %in% two$Donor] = 2
+covidall$Score[covidall$Donor %in% three$Donor] = 3
+covidall$Score[covidall$Donor %in% four$Donor] = 4
+covidall$Score[covidall$Donor %in% five$Donor] = 5 
+covidall$Score <- factor(covidall$Score, levels = c("0", "1", "2", "3", "4"))
+
+
+```
+
+```{r}
+covidall = subset(covidall, subset = manual.coarse.idents != "Neutrophil")
+covidall = subset(covidall, subset = manual.coarse.idents != "Developing neutrophil")
+print("subsetted")
+covidall = SCTransform(covidall, vars.to.regress = c("percent.mt", "percent.rps", "percent.rpl", "percent.rrna", "nCount_RNA", "nFeature_RNA", "percent.hb"), verbose = FALSE)
+covidall <- RunPCA(covidall, verbose = F)
+covidall <- RunUMAP(covidall, verbose = F, dims = 1:50)
+covidall <- FindNeighbors(covidall)
+covidall <- FindClusters(covidall)
+saveRDS(covidall, "scPBMC.rds")
+
+scPBMCcovid = subset(covidall, subset = Status == "COVID")
+saveRDS(scPBMCcovid, "scPBMCcovid.rds")
+```
+

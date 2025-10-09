@@ -1,0 +1,5093 @@
+---
+title: "Figures for Paper"
+output: html_document
+date: "2023-10-05"
+---
+
+#LIBRARIES
+```{r}
+library(Matrix)
+library(plyr)
+library(dplyr)
+library(readxl)
+library(Seurat) 
+library(sctransform)
+library(igraph)
+library(ComplexHeatmap)
+library(circlize)
+library(openxlsx)
+library(ggpubr)
+library(ggplot2)
+library(cowplot)
+library(data.table)
+library(nichenetr)
+library(tidyverse)
+library(SingleCellExperiment)
+library(EnhancedVolcano)
+library(STRINGdb)
+library(NatParksPalettes)
+library(MoMAColors)
+library(MetBrewer)
+library(viridis)
+library(BioNet)
+library(network)
+library(sna)
+library(intergraph)
+library(ggraph)
+library(tidygraph)
+library(reticulate)
+library(magrittr)
+library(DESeq2)
+library(ComplexUpset)
+library(CytoTRACE2)
+library(PNWColors)
+library(multinichenetr)
+library(patchwork)
+library(reticulate)
+library(anndata)
+library(gridExtra)
+library(grid)
+library(VennDiagram)
+library(gtable)
+library(grid)
+library(gridExtra)
+
+```
+
+
+#Load Seurats
+```{r}
+#Load Seurat objects from scRNAseq and cyTOF these objects are created in file make_seurat_objects in this github folder
+
+scPBMC = readRDS('scPBMC.rds')
+scPBMCcovid = readRDS('scPBMCcovid.rds')
+cyPBMC = readRDS('cyPBMC.rds')
+cyNK = readRDS('cyNK.rds')
+scNKcovid = readRDS('scNKcovid_clustered.rds')
+
+```
+#Figure 1
+##1A is a biorender figure
+
+##1B Boxplot NT50 
+```{r}
+path_fig = 'Figure 1/'
+#Source Data Figure 1
+covid_titer = read.xlsx('Source_Data_Figure_1.xlsx', sheet = "1B, C, and D")
+
+rownames(covid_titer) <- covid_titer$Donor
+covid_titer <- covid_titer %>% select(-Score)
+colnames(covid_titer) <- c("Donor", "Wu-1 (Ancestral)", "Alpha", "Beta", "Delta", "Omicron\n(B1.1.529)")
+covid_titer <- pivot_longer(covid_titer, cols = -Donor, names_to = "Virus", values_to = "Titer")
+covid_titer$Virus <- factor(covid_titer$Virus, levels = c("Wu-1 (Ancestral)", "Alpha", "Beta", "Delta", "Omicron\n(B1.1.529)"))
+
+my_comparisons <- list(
+  c("Wu-1 (Ancestral)", "Alpha"),
+  c("Wu-1 (Ancestral)", "Beta"),
+  c("Wu-1 (Ancestral)", "Delta"),
+  c("Wu-1 (Ancestral)", "Omicron\n(B1.1.529)")
+)
+
+p1 = ggplot(covid_titer, aes(x = Virus, y = Titer, color = Virus))+
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.3) +
+  geom_boxplot(
+    aes(fill = Virus),
+    outlier.shape = NA,
+    width = 0.5,
+    alpha = 0.3  
+  ) +
+  geom_point(
+    position = "dodge",
+    size = 2
+  ) +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    method = "wilcox",
+    label = "p.format",
+    paired = T,
+    p.adjust.method = "bonferroni",
+    size = 4
+  ) +
+  geom_hline(yintercept = 100, linetype = "dashed", color = "black") +
+  scale_y_log10(limits = c(NA, 20000)) +
+  scale_color_manual(values = moma.colors("Levine2", 6)) +
+  scale_fill_manual(values = moma.colors("Levine2", 6)) +
+  theme_classic() +
+  labs(y = "NT50") +
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.title.x = element_blank(),
+    legend.position = "none"
+  )
+
+ggsave("1B.pdf", plot = p1, device = "pdf", path = path_fig, height = 4.75, width = 4)
+
+
+```
+
+##1C Heatmap NT50 
+```{r}
+#Source Data Figure 1
+covid_titer = read.xlsx('Source_Data_Figure_1.xlsx', sheet = "1B, C, and D")
+
+rownames(covid_titer) = covid_titer$Donor
+covid_titer = subset(covid_titer, select = -c(Donor, Score))
+#Log transform for data viz
+titermatrix = data.matrix(log2(covid_titer))
+#Add metadata
+meta = scPBMCcovid@meta.data %>%
+  select(Donor, Breadth, Score, Severity.max.final, acuity) %>%
+  unique()
+rownames(meta) = meta$Donor
+meta$Score = as.character(meta$Score)
+meta = subset(meta, select = -c(Donor))
+
+#metadata CyTOF cohort overlap
+meta_cy = cyPBMC@meta.data %>%
+  select(patient_id, Severity.max.final) %>%
+  unique()
+meta$cyTOF = rownames(meta) %in% meta_cy$patient_id
+meta$cyTOF = factor(meta$cyTOF, levels = c(TRUE, FALSE))
+
+
+colnames(meta)[1] = "Breadth Group" 
+colnames(meta)[2] = "Breadth Score" 
+colnames(meta)[3] = "Peak Severity" 
+colnames(meta)[4] = "Acuity at Draw" 
+colnames(meta)[5] = "Included in CyTOF" 
+
+meta <- meta[match(rownames(covid_titer), rownames(meta)), ]
+
+#split Broad and Narrow groups by an empty row
+matrix_part1 <- titermatrix[1:(18 - 1), , drop = FALSE]
+matrix_part2 <- titermatrix[18:nrow(titermatrix), , drop = FALSE]
+new_row = rep(NA, 5)
+modified_matrix <- rbind(matrix_part1, new_row, matrix_part2)
+meta1 <- meta[1:(18 - 1), , drop = FALSE]
+meta2 <- meta[18:nrow(meta), , drop = FALSE]
+new_meta = c(NA, NA)
+modified_meta <- rbind(meta1, new_meta, meta2)
+rownames(modified_meta) = as.character(rownames(modified_meta))
+
+#Heatmap Annotation
+score.cols <- natparks.pals("Denali", 5)
+severity.cols = moma.colors("ustwo", n = 5)
+breadth.cols = moma.colors("Smith", n = 3)
+acuity.cols = moma.colors("Andri", 3) 
+cytof.cols = met.brewer("Hokusai3") 
+col_colors = HeatmapAnnotation(df = modified_meta, 
+                           col = list("Breadth Group" = c("Narrow" = breadth.cols[1],
+                                                          "Broad" = breadth.cols[2],
+                                                          "18" = "grey"),
+                                      "Breadth Score" = c("0" = score.cols[1],
+                                                          "1" = score.cols[2],
+                                                          "2" = score.cols[3],
+                                                          "3" = score.cols[4],
+                                                          "4" = score.cols[5],
+                                                          "18" = "grey"), 
+                                      "Peak Severity" = c("1-3" = severity.cols[4],
+                                                          "4-5" = severity.cols[3],
+                                                          "6-7" = severity.cols[2],
+                                                          "8" = severity.cols[1],
+                                                          "0" = severity.cols[5],
+                                                          "18" = "grey"),
+                                      "Acuity at Draw" = c("Acute" = acuity.cols[1],
+                                                           "Convalescent" = acuity.cols[2],
+                                                          "18" = "grey"),
+                                      "Included in CyTOF" = c("TRUE" = cytof.cols[1],
+                                                           "FALSE" = cytof.cols[2],
+                                                          "18" = "grey")),
+                           simple_anno_size = unit(.4, "cm"),
+                           annotation_name_gp= gpar(fontsize = 10))
+
+colnames(modified_matrix)[5] = "Omicron (B1.1.529)"
+colnames(modified_matrix)[1] = "Wu-1 (Ancestral)"
+modified_matrix = t(modified_matrix)
+
+p2 = Heatmap(modified_matrix, 
+        bottom_annotation = col_colors,
+        name = "log2(NT50)",
+        col = magma(20),
+        cluster_columns = F,
+        cluster_rows = F,
+        row_names_gp = gpar(fontface = "bold"),
+        column_names_gp = gpar(fontsize=0),
+        width = unit(120, "mm"),  
+        height = unit(35, "mm"))
+p2 = draw(p2, annotation_legend_side = "bottom", heatmap_legend_side = "right")
+
+pdf(file = paste0(path_fig, "1C.pdf"),width = 8, height = 5)
+p2
+dev.off()
+
+```
+
+##1D Upset plot virus combinations
+```{r}
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+
+meta = scPBMCcovid@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Donor, Severity.max.final, WT, Alpha, Beta, Delta, Omicron)%>%
+  unique()
+meta$`Wu-1` = mapvalues(meta$WT, from = c("WT Neutralizer", "Non-Neutralizer"), to = c(TRUE, FALSE))
+meta$Alpha = mapvalues(meta$Alpha, from = c("Alpha Neutralizer", "Non-Neutralizer"), to = c(TRUE, FALSE))
+meta$Beta = mapvalues(meta$Beta, from = c("Beta Neutralizer", "Non-Neutralizer"), to = c(TRUE, FALSE))
+meta$Delta = mapvalues(meta$Delta, from = c("Delta Neutralizer", "Non-Neutralizer"), to = c(TRUE, FALSE))
+meta$Omicron = mapvalues(meta$Omicron, from = c("Omicron Neutralizer", "Non-Neutralizer"), to = c(TRUE, FALSE))
+
+p3 = ComplexUpset::upset(
+  meta,
+  c("Omicron", "Delta", "Beta", "Alpha", "Wu-1"),
+  name = "Variant",
+  sort_intersections = F,
+  sort_sets = F,
+  intersections = list(
+    c("Wu-1", "Alpha", "Beta", "Delta"),
+    c("Wu-1", "Alpha", "Beta"),
+    c("Wu-1", "Alpha", "Delta"),
+    c("Wu-1", "Beta", "Delta"),
+    c("Wu-1", "Beta", "Omicron"),
+    c("Wu-1", "Alpha"),
+    c("Wu-1",  "Beta"),
+    "Wu-1",
+    "Beta",
+    "Outside of known sets"
+  ),
+  base_annotations = list('Intersection size' = intersection_size(
+    counts = F,
+    mapping = aes(fill =
+                    Severity.max.final)
+  )),
+  themes = upset_modify_themes(list(
+    'intersections_matrix' = theme(
+      text = element_text(
+        face = "bold",
+        color = "black",
+        size = 20
+      ),
+      axis.text = element_text(color = "black")
+    )
+  ))
+) &
+  scale_fill_manual(values = severity.cols) &
+  guides(fill = guide_legend(title = "Peak Severity")) &
+  theme(
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 12),
+    axis.text = element_text(size = 16, color = "black"),
+    axis.title = element_text(size = 16)
+  )
+ggsave("1D.pdf", plot = p3, device = "pdf", path = path_fig, width = 7, height = 4.5)
+
+
+```
+##1E Scatter Plot Severity 
+```{r}
+meta = scPBMCcovid@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(MAX_SEVERITY_SCORE, acuity, Score, Donor) %>% 
+  unique()
+rownames(meta) = meta$Donor
+meta$MAX_SEVERITY_SCORE = factor(meta$MAX_SEVERITY_SCORE, levels = c(1, 2, 3, 4, 5, 6, 7, 8))
+meta$Score = as.factor(meta$Score)
+
+
+p4 = ggplot(meta, aes(x = Score, y = MAX_SEVERITY_SCORE, shape = acuity)) +
+  geom_point(position =  position_jitter(width = 0.15, height = .1), size = 3) +
+  labs(x = "Breadth Score",
+       y = "WHO Severity Score") +
+  theme_classic() +
+  scale_shape_manual(values = c(17, 15)) +
+  stat_cor(mapping = aes(group = 1),
+           method = "spearman",
+           label.y = 1,
+           label.x = .5,
+           size = 6,
+           fontface = "bold") +
+  guides(shape = guide_legend("Acuity", override.aes = aes(label = "")))+
+  scale_y_discrete(drop = F)+
+  theme(
+    axis.text = element_text(size = 16, color = "black"),
+    axis.title = element_text(size = 18),
+    legend.text = element_text(size = 16),
+    legend.title = element_text(size = 18, face = "bold"),
+    aspect.ratio = 1
+  )+NoLegend()
+ggsave("1E.pdf", plot = p4, device = "pdf", path = path_fig, height = 4, width = 5)
+
+
+```
+
+##1F Scatter Plot Acuity 
+```{r}
+meta = scPBMCcovid@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(days_post_pos_test, acuity, Score, Donor) %>% 
+  unique()
+rownames(meta) = meta$Donor
+meta$Score = as.factor(meta$Score)
+
+
+p5 = ggplot(meta, aes(x = Score, y = days_post_pos_test, shape = acuity)) +
+  geom_point(position =  position_jitter(width = 0.15, height = .1), size = 3) +
+  labs(x = "Breadth Score",
+       y = "Days Post Positive Test") +
+  theme_classic() +
+  scale_shape_manual(values = c(17, 15)) +
+  scale_y_continuous()+
+  stat_cor(mapping = aes(group = "acuity"),
+           method = "spearman",
+           label.y = 60,
+           label.x = .5,
+           size = 6) +
+  guides(shape = guide_legend("Acuity", override.aes = aes(label = ""))) +
+  theme(
+    axis.text = element_text(size = 16, color = "black"),
+    axis.title = element_text(size = 18),
+    legend.text = element_text(size = 16),
+    legend.title = element_text(size = 18, face = "bold"),
+    aspect.ratio = 1
+  )
+ggsave("1F.pdf", plot = p5, device = "pdf", path = path_fig, height = 4, width = 6)
+
+```
+
+
+##1G UMAPS Celltype, Breadth Group, Severity
+```{r}
+breadth.cols = moma.colors("Smith", n = 3)
+names(breadth.cols) = c("Narrow", "Broad", "Healthy")
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+cell.cols = met.brewer("Signac", n = 15, type = "continuous")
+names(cell.cols) <- c(
+  "Platelet",
+  "B",
+  "Misc T",
+  "CD4 T",
+  "Eos/Mast Prog",
+  "Other Myeloid Cells",
+  "CD16 Monocyte",
+  "PB",
+  "Prolif Lymph",
+  "HSPC",
+  "DC",
+  "pDC",
+  "NK",
+  "CD8 T",
+  "CD14 Monocyte"
+)
+
+
+scPBMC$manual.coarse.idents = factor(scPBMC$manual.coarse.idents,
+    levels = c(
+      "NK",
+      "CD8 T",
+      "CD4 T",
+      "Prolif Lymph",
+      "B",
+      "PB",
+      "CD14 Monocyte",
+      "CD16 Monocyte",
+      "DC",
+      "pDC",
+      "Platelet",
+      "Eos/Mast Prog"))
+Idents(scPBMC) = scPBMC$manual.coarse.idents
+#UMAP Cell Type scRNAseq
+p6 = DimPlot(
+  scPBMC,
+  group.by = "manual.coarse.idents",
+  reduction = "umap",
+  raster = F,
+  cols = cell.cols,
+  label = T,
+  repel = T,
+  label.size = 5
+) + theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  aspect.ratio = 1,
+  plot.margin = margin(0, 0, 0, 0),
+  axis.title = element_blank(),
+  title = element_text(size =20, face = "bold"),
+  legend.text = element_text(size =12)
+) + ggtitle("Cell Types")
+p6$layers[[1]]$aes_params$alpha = .3
+p6 = p6 + guides(colour = guide_legend(override.aes = list(alpha = 1, size =
+                                                             4)))
+ggsave("1G_1.pdf", plot = p6, device = "pdf", path = path_fig, height = 5, width = 6, dpi = 150)
+
+
+
+p <- ggplot(your_umap_data, aes(x = UMAP1, y = UMAP2, color = cluster)) +
+  geom_point_rast(size = 0.5) +   # rasterized points (super lightweight)
+  theme_classic()
+
+ggsave("umap_raster_points.pdf", p,
+       device = cairo_pdf, useDingbats = FALSE, width = 6, height = 6)
+
+#UMAP breadth scRNAseq
+scPBMC$Breadth <- factor(scPBMC$Breadth, levels = c("Narrow", "Broad", "Healthy"))
+p7 = DimPlot(
+  scPBMC,
+  group.by = "Breadth",
+  reduction = "umap",
+  raster = F,
+  cols = breadth.cols,
+  label = F,
+  repel = T,
+  label.size = 5
+) + theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title = element_blank(),
+  aspect.ratio = 1,
+  plot.margin = margin(0, 0, 0, 0),
+  title = element_text(size = 20, face = "bold"),
+  legend.text = element_text(size =12)
+) + ggtitle("Breadth Groups")
+p7$layers[[1]]$aes_params$alpha = .3
+p7 = p7 + guides(colour = guide_legend(override.aes = list(alpha = 1, size =
+                                                             4)))
+ggsave("1G_2.png", plot = p7, device = "png", path = path_fig, height = 5, width = 6)
+
+#UMAP severity scRNAseq
+p8 = DimPlot(
+  scPBMC,
+  group.by = "Severity.max.final",
+  reduction = "umap",
+  raster = F,
+  cols = severity.cols,
+  label = F,
+  repel = T,
+  label.size = 5
+) + theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title = element_blank(),
+  aspect.ratio = 1,
+  plot.margin = margin(0, 0, 0, 0),
+  title = element_text(size = 20, face = "bold"),
+  legend.text = element_text(size =12)
+) + ggtitle("Peak Severity")
+p8$layers[[1]]$aes_params$alpha = .3
+p8 = p8 + guides(colour = guide_legend(override.aes = list(alpha = 1, size =
+                                                             4))) 
+ggsave("1G_3.png", plot = p8, device = "png", path = path_fig, height = 5, width = 6)
+
+#UMAP cell type CyTOF
+cyPBMC$annotated_clusters  = factor(cyPBMC$annotated_clusters, levels = c(
+      "NK",
+      "CD8 T",
+      "CD4 T",
+      "Misc T",
+      "B",
+      "CD14 Monocyte",
+      "CD16 Monocyte",
+      "Other Myeloid Cells"
+    )
+  )
+p9 = DimPlot(
+  cyPBMC,
+  group.by = "annotated_clusters",
+  reduction = "umapraw",
+  raster = T,
+  cols = cell.cols,
+  label = T,
+  repel = T,
+  label.size = 5
+) + labs(x = "UMAP1", y = "UMAP2") + theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title = element_text(size = 20),
+  aspect.ratio = 1,
+  plot.margin = margin(0, 0, 0, 0),
+  plot.title = element_blank(),
+  legend.text = element_text(size =12)
+) 
+p9$layers[[1]]$aes_params$alpha = .4
+p9 = p9 + guides(colour = guide_legend(override.aes = list(alpha = 1, size = 4)))
+ggsave("1G_4.png", plot = p9, device = "png", path = path_fig, height = 5, width = 6)
+
+#UMAP Breadth CyTOF
+cyPBMC$breadth = factor(cyPBMC$Breadth, levels = c("Narrow", "Broad", "Healthy"))
+p10 = DimPlot(
+  cyPBMC,
+  group.by = "breadth",
+  reduction = "umapraw",
+  raster = T,
+  cols = breadth.cols,
+  label = F,
+  repel = T,
+  label.size = 5
+) + theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title = element_blank(),
+  aspect.ratio = 1,
+  plot.margin = margin(0, 0, 0, 0),
+  plot.title = element_blank(),
+  legend.text = element_text(size =12)
+) 
+p10$layers[[1]]$aes_params$alpha = .4
+p10 = p10 + guides(colour = guide_legend(override.aes = list(alpha = 1, size = 4)))
+ggsave("1G_5.png", plot = p10, device = "png", path = path_fig, height = 5, width = 6)
+
+#UMAP severity CyTOF
+p11 = DimPlot(
+  cyPBMC,
+  group.by = "Severity.max.final",
+  reduction = "umapraw",
+  raster = T,
+  cols = severity.cols,
+  label = F,
+  repel = T,
+  label.size = 5
+) + 
+  theme(axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title = element_blank(),
+  aspect.ratio = 1,
+  plot.margin = margin(0, 0, 0, 0),
+  plot.title = element_blank(),
+  legend.text = element_text(size =12)
+)
+p11$layers[[1]]$aes_params$alpha = .3
+p11 = p11 + guides(colour = guide_legend(override.aes = list(alpha = 1, size =
+                                                             4)))
+ggsave("1G_6.png", plot = p11, device = "png", path = path_fig, height = 5, width = 6)
+
+
+#Align Plots
+grid1 = plot_grid(
+  plotlist = list(p6, p7, p8, p9, p10, p11),
+  ncol = 3,
+  align = "hv",
+  axis = "tblr",
+  greedy = T
+)
+
+ggsave("1G.pdf", plot = grid1, device = "pdf", path = path_fig, height = 8.2, width = 16.9)
+
+
+```
+
+#Figure 2
+##2A Heatmap Pseudobulk DESeq2
+```{r}
+path_fig = 'Figure 2/'
+
+#Subset QC metrics for raw counts input to DESeq2
+seu = subset(scPBMCcovid, subset = nFeature_RNA > 300 & nFeature_RNA < 4000 & nCount_RNA < 10000 &
+               percent.mt < 15 & percent.mt >1 & percent.rps >.5 & percent.rps < 7 &
+               percent.rpl > .5 & percent.rpl <7.5 & percent.rrna < 50 & percent.rrna > 3)
+
+#Pseudobulk Samples
+count_data = AggregateExpression(seu, assays = 'RNA', group.by = "Donor", slot = "counts", return.seurat = T)
+#for normalization of gene counts 
+nCount_RNA = count_data@meta.data
+nCount_RNA = subset(nCount_RNA, select = -c(nFeature_RNA, orig.ident))
+#counts per donor
+count_data = as.data.frame(GetAssayData(object = count_data, slot = "counts"))
+
+coldata = seu@meta.data
+coldata = coldata %>%
+  as.data.frame() %>%
+  dplyr::select(Donor, Breadth, Score, Severity.max.final) %>% 
+  unique()
+rownames(coldata) = coldata$Donor
+coldata$Score = as.numeric(as.character(coldata$Score))
+
+#make DESeq
+dds = DESeqDataSetFromMatrix(countData = round(count_data), colData = coldata, 
+                             design = ~ Score)
+keep <- rowSums(counts(dds)) > 1
+dds <- dds[keep,]
+
+#run DEseq
+dds = DESeq(dds)
+res <- results(dds, name = "Score", alpha = 0.05)
+res_tbl <- res %>%
+  data.frame() %>%
+  rownames_to_column(var = "gene") %>%
+  arrange(padj)
+
+#find significant genes from DEseq Results and we only want to plot genes upregulated at low score
+sig_genes = subset(res_tbl, padj < .05 & log2FoldChange < 0)
+#This table generated is Supplementary Data Table 2, Tab DEG_PBMC_DESeq2
+#write.xlsx(sig_genes, paste0(path_fig, "/pseudobulk_allPBMC_regression.xlsx")) 
+
+
+#Make expression matrix of the significant genes found
+genes_heatmap = sig_genes$gene
+sig_matrix = count_data[genes_heatmap,] %>% 
+  as.data.frame() %>% 
+  t()
+sig_matrix = merge(sig_matrix, nCount_RNA, by = "row.names")
+rownames(sig_matrix) = sig_matrix$Row.names
+sig_matrix = subset(sig_matrix, select = -c(Row.names))
+sig_matrix = sig_matrix/sig_matrix[,"nCount_RNA"]
+sig_matrix = subset(sig_matrix, select = -c(nCount_RNA))
+sig_matrix = scale(sig_matrix)
+
+rownames(coldata) = coldata$Donor
+coldata$Score = as.character(coldata$Score)
+coldata = subset(coldata, select = -c(Donor))
+colnames(coldata)[1] = "Breadth Group" 
+colnames(coldata)[2] = "Breadth Score" 
+colnames(coldata)[3] = "Peak Severity" 
+coldata = coldata[order(coldata$`Breadth Score`),]
+sig_matrix <- sig_matrix[match(rownames(coldata), rownames(sig_matrix)), ]
+
+score_colors <- natparks.pals("Denali", 5)
+severity.cols = moma.colors("ustwo", n = 5)
+breadth.cols = moma.colors("Smith", n = 3)
+
+row_colors = rowAnnotation(df = coldata, 
+                           col = list("Breadth Group" = c("Narrow"= breadth.cols[1],
+                                                          "Broad" = breadth.cols[2]),
+                                      "Breadth Score" = c("0" = score_colors[1],
+                                                          "1" = score_colors[2],
+                                                          "2" = score_colors[3],
+                                                          "3" = score_colors[4],
+                                                          "4" = score_colors[5],
+                                                          "Healthy Controls" = "grey"), 
+                                      "Peak Severity" = c("1-3" = severity.cols[4],
+                                                          "4-5" = severity.cols[3],
+                                                          "6-7" = severity.cols[2],
+                                                          "8" = severity.cols[1],
+                                                          "0" = severity.cols[5])),
+                           annotation_name_gp = gpar(fontsize = 10))
+
+
+diverging.cols = met.brewer("Benedictus", 13)
+
+p12 = Heatmap(
+  sig_matrix,
+  left_annotation = row_colors,
+  name = "Z-Score",
+  col = colorRamp2(
+    breaks = c(4, 3, 2, 1, 0, -1, -2, -3, -4),
+    colors = c(
+      diverging.cols[1],
+      diverging.cols[2],
+      diverging.cols[3],
+      diverging.cols[4],
+      diverging.cols[7],
+      diverging.cols[10],
+      diverging.cols[11],
+      diverging.cols[12],
+      diverging.cols[13]
+    )
+  ),
+  cluster_rows = F,
+  cluster_columns = T,
+  column_title = gpar(fontsize = 0),
+  column_names_gp = gpar(fontface = "italic", fontsize = 10),
+  row_names_gp = gpar(fontsize = 0),
+  width = unit(90, "mm"),
+  height = unit(110, "mm")
+    
+)
+p12 = draw(p12)
+pdf(file = paste0(path_fig, "2A.pdf"),width = 7,height = 7)
+p12
+dev.off()
+
+column_order <- column_order(p12)
+
+
+```
+##2B Heatmap Cell Type Breadth Group Expression of ISGs
+```{r}
+#genes from 2A
+narrow_genes = sig_genes$gene
+scPBMC$Breadth = factor(scPBMC$Breadth, levels =c("Healthy", "Narrow", "Broad"))
+narrow_sc = AverageExpression(scPBMC, assays = 'RNA', group.by = c("Breadth", "manual.coarse.idents"), slot = "data")
+narrow_sc = as.data.frame(narrow_sc$RNA)
+narrow_sc = narrow_sc[rownames(narrow_sc) %in% narrow_genes,] %>% 
+  t() %>% 
+  scale ()
+
+#breadth labels
+breadth_anno = str_extract(rownames(narrow_sc), "^[^_]+") %>% 
+  as.data.frame()
+colnames(breadth_anno)[1] = "Breadth Group"
+breadth_anno$`Breadth Group` = factor(breadth_anno$`Breadth Group`, levels = c("Broad", "Narrow", "Healthy"))
+
+breadth.cols = moma.colors("Smith", n = 3)
+row_colors = rowAnnotation(df = breadth_anno,
+                           col = list(
+                             "Breadth Group" = c(
+                               "Narrow" = breadth.cols[1],
+                               "Broad" = breadth.cols[2],
+                               "Healthy" = breadth.cols[3]
+                             )
+                           ), annotation_legend_param = list(
+                          title_gp = gpar(fontsize = 14, fontface = "bold"),
+                          labels_gp = gpar(fontsize = 12)))
+
+new_rownames <- str_extract(rownames(narrow_sc), "(?<=_).*") 
+#order genes by heierarchical clustering of genes from 2A
+narrow_sc <- narrow_sc[,match(colnames(sig_matrix), colnames(narrow_sc))]
+
+p13 = Heatmap(
+  narrow_sc,
+  name = "Z-Score",
+  col = colorRamp2(
+    breaks = c(4, 3, 2, 1, 0, -1, -2, -3, -4),
+    colors = c(
+      diverging.cols[1],
+      diverging.cols[2],
+      diverging.cols[3],
+      diverging.cols[4],
+      diverging.cols[7],
+      diverging.cols[10],
+      diverging.cols[11],
+      diverging.cols[12],
+      diverging.cols[13]
+    )
+  ),
+  left_annotation = row_colors,
+  row_labels = new_rownames,
+  cluster_rows = T,
+  cluster_columns = F,
+  column_names_gp = gpar(fontsize = 12, fontface = "italic"),
+  row_names_gp = gpar(fontsize = 12),
+  column_order = column_order,
+  width = unit(100, "mm"),
+  height = unit(130, "mm"),
+  heatmap_legend_param = list(
+          title_gp = gpar(fontsize = 14, fontface = "bold"),
+          labels_gp = gpar(fontsize = 12)
+        )
+)
+p13 = draw(p13)
+
+pdf(file = paste0(path_fig, "2B.pdf"), width = 10, height = 10)
+p13
+dev.off()
+```
+
+##2C-D Scatter and Boxplots of NK Cell Proportion
+```{r}
+#scRNAseq
+meta_sc = scPBMC@meta.data
+fq_prop = prop.table(table(scPBMC$manual.coarse.idents, meta_sc$Donor), 2)*100
+fq_prop = reshape2::melt(fq_prop, value.name = "NKprop", varnames = c("manual.coarse.idents", "Donor")) %>% 
+  filter(manual.coarse.idents == "NK") %>% 
+  na.omit()
+meta_sc_add = meta_sc %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Score, Donor, Breadth) %>% 
+  unique()
+rownames(meta_sc_add) = meta_sc_add$Donor
+fq_prop = left_join(fq_prop, meta_sc_add, by = "Donor")
+fq_prop$modality = "scRNAseq"
+#Remove healthy donors
+fq_prop_covid = fq_prop[fq_prop$Severity.max.final != 0,]
+
+#CyTOF
+meta_cy = cyPBMC@meta.data
+fq_prop_cy <- prop.table(table(cyPBMC$annotated_clusters, meta_cy$patient_id), 2) *100
+fq_prop_cy <- reshape2::melt(fq_prop_cy, value.name = "NKprop", varnames = c("annotated_clusters", "patient_id")) %>% 
+  filter(annotated_clusters=="NK") %>% 
+  na.omit()
+meta_cy_add = meta_cy %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Score, patient_id, Breadth) %>% 
+  unique()
+rownames(meta_cy_add) = meta_cy_add$patient_id
+fq_prop_cy = left_join(fq_prop_cy, meta_cy_add, by = "patient_id")
+fq_prop_cy$modality = "CyTOF"
+colnames(fq_prop_cy)[1] = "manual.coarse.idents"
+colnames(fq_prop_cy)[2] = "Donor"
+#Remove healthy donors
+fq_prop_cy_covid = fq_prop_cy[fq_prop_cy$Severity.max.final != 0,]
+
+#Combine Data
+fq_prop_covid_all = rbind(fq_prop_covid, fq_prop_cy_covid)
+fq_prop_covid_all$modality = factor(fq_prop_covid_all$modality, levels = c("scRNAseq", "CyTOF"))
+fq_prop_all = rbind(fq_prop, fq_prop_cy)
+fq_prop_all$modality = factor(fq_prop_all$modality, levels = c("scRNAseq", "CyTOF"))
+
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+#Plot Score correlation
+p14 = ggplot(fq_prop_covid_all,
+             aes(
+               x = Score,
+               y = NKprop
+             )) +
+  geom_jitter(aes(color = Severity.max.final,
+               shape = acuity), size = 3,
+              width = .05,
+              height = 0) +
+  scale_color_manual(values = severity.cols) +
+  scale_shape_manual(values = c(17, 15)) +
+  facet_wrap(~modality)+
+  geom_smooth(method = 'lm', aes(group = 1), color = "black") +
+  stat_cor(mapping = aes(group = 1),
+           method = "spearman",
+           label.y= 47,
+           size = 7) +
+  theme_bw()+
+  labs(y = "NK Cells (% of PBMC)", x = "Breadth Score") +
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold", size =24),
+    axis.text = element_text(color = "black", size = 22),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 22
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(hjust = .5, size = 24, face = "bold"),
+    aspect.ratio = 1,
+    strip.background = element_blank(),
+    panel.spacing = unit(3, "lines")  
+  ) +
+  NoLegend()
+ggsave("2C.pdf", plot = p14, path = path_fig, height = 5, width = 10)
+
+#Plot Breadth Groups
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+fq_prop_all$Breadth <- factor(fq_prop_all$Breadth, levels = c("Healthy", "Narrow", "Broad"))
+p15 = ggboxplot(
+  fq_prop_all,
+  x = "Breadth",
+  y = "NKprop",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap(~modality)+
+  stat_compare_means(method = "wilcox",
+                     comparisons = my_comparisons.current,
+                     label = "p.format", size = 8) +
+  theme_bw() +
+  labs(y = "NK Cells (% of PBMC)", x = "Breadth Group") +
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  theme(
+    strip.text = element_text(face = "bold", size = 24),
+    axis.text = element_text(color = "black", size = 22),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 22
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(hjust = .5, size = 24, face = "bold"),
+    aspect.ratio = 1,
+    strip.background = element_blank(),
+    panel.spacing = unit(3, "lines")  
+  )
+ggsave("2D.pdf",plot = p15,  path = path_fig, height = 5, width = 12)
+
+```
+
+#Figure 3
+##3A UMAP NK cells Breadth
+```{r}
+path_fig = 'Figure 3/'
+
+breadth.cols = moma.colors("Smith", n = 3)
+names(breadth.cols) = c("Narrow", "Broad", "Healthy")
+p16 = DimPlot(
+  scNKcovid,
+  group.by = "Breadth",
+  reduction = "umap",
+  raster = F,
+  cols = breadth.cols,
+  label = F,
+  repel = T
+) + labs(x = "UMAP1", y = "UMAP2") + theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title = element_text(size = 20),
+  plot.title = element_text(size = 24),
+  legend.text = element_text(size = 18),
+  aspect.ratio = 1
+) + ggtitle("Breadth Groups")
+p16$layers[[1]]$aes_params$alpha = .8
+p16 = p16 + guides(colour = guide_legend(override.aes = list(alpha = 1, size =
+                                                               3))) 
+ggsave("3A.pdf", plot = p16, device = "pdf", path = path_fig, height = 5, width = 5)
+```
+
+##3B UMAP NK cells Severity
+```{r}
+p17 = DimPlot(
+  scNKcovid,
+  group.by = "Severity.max.final",
+  reduction = "umap",
+  raster = F,
+  cols = severity.cols,
+  label = F,
+  repel = T
+) + labs(x = "UMAP1", y = "UMAP2", color = "WHO\nSeverity\nScore") + theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title = element_text(size = 20),
+  plot.title = element_text(size = 24),
+  legend.text = element_text(size = 18),
+  aspect.ratio = 1,
+  legend.title = element_text(size = 18)
+) + ggtitle("Peak Severity")
+p17$layers[[1]]$aes_params$alpha = .8
+p17 = p17 + guides(colour = guide_legend(override.aes = list(alpha = 1, size =
+                                                               3))) 
+ggsave("3B.pdf", plot = p17, device = "pdf", path = path_fig, height = 5, width = 5)
+```
+
+##3C Volcano plot  NK Cell DEGs
+```{r}
+#Resulting table is Supplementary Data Table 2, Tab DEG_NK
+deg_NK  = FindMarkers(scNKcovid, ident.1 = "Narrow", ident.2 = "Broad", group.by = "Breadth", assay = "RNA", slot = "data", test.use = "wilcox")
+remove = rownames(deg_NK)[grep("^MT|^HB|^RP|^IG", rownames(deg_NK))]
+deg_NK = deg_NK[!(rownames(deg_NK) %in% remove),]
+deg_NK$Gene = rownames(deg_NK)
+
+#label genes for volcano plot
+labels = c(
+  "EIF2AK2",
+  "MX1",
+  "IFIT2",
+  "ISG15",
+  "OAS3",
+  "IFIT1",
+  "IFIT3",
+  "IFI6",
+  "OAS2",
+  "IFI44",
+  "IFI44L",
+  "SAMD9",
+  "XAF1",
+  "RSAD2",
+  "MX2",
+  "PRF1",
+  "CX3CR1",
+  "MKI67",
+  "KLRC1",
+  "IL7R",
+  "HLA-DRA",
+  "OAS1",
+  "IRF7"
+)
+
+keyvals <- ifelse(
+    (deg_NK$avg_log2FC < -.25 & deg_NK$p_val_adj<.05) , '#75bca9'  ,
+      ifelse((deg_NK$avg_log2FC > .25 & deg_NK$p_val_adj<.05), '#ef7923',
+        'grey'))
+keyvals[is.na(keyvals)] <- 'black'
+names(keyvals)[keyvals == '#75bca9'] <- 'Up in Broad'
+names(keyvals)[keyvals == 'grey'] <- "Log2FC only"
+names(keyvals)[keyvals == '#ef7923'] <- 'Up in Narrow'
+
+p18 = EnhancedVolcano(deg_NK, x = "avg_log2FC", 
+                      y = "p_val_adj", lab = deg_NK$Gene, 
+                      selectLab = labels, 
+                      FCcutoff = .25, 
+                      xlim = c(-2,2), 
+                      colCustom = keyvals,
+                      labSize = 5.5, 
+                      colAlpha = .8,
+                      labFace = "italic", 
+                      boxedLabels = F, 
+                      drawConnectors = T, 
+                      ylim = c(0,100),
+                      max.overlaps = Inf, 
+                      arrowheads = F, 
+                      title = NULL, 
+                      subtitle = NULL, 
+                      caption = NULL,
+                      pCutoff = .05)+
+  theme(axis.title = element_text(size = 24, color = "black"),
+        legend.text = element_text(size = 20, color = "black"),
+        axis.text = element_text(color = "black"))
+ggsave("3C.pdf", plot = p18, device = "pdf", path = path_fig, height = 6, width = 8)
+
+#remove non-significant genes for future plots
+deg_NK = subset(deg_NK, p_val_adj < 5e-2)
+```
+##3D BioNet Graph visualization of DEGs
+```{r}
+#STRINGdb was used to create a gene network of the 2000 most differentially expressed genes in NK cells which was exported as tsv. stringdb_NK_background.tsv is in github repo 
+gene_network_NK_background = read.table('stringdb_NK_background.tsv', header = TRUE)
+gene_network_NK_background = graph_from_data_frame(gene_network_NK_background)
+gene_network_NK_background = rmSelfLoops(gene_network_NK_background)
+
+#Run Bionet scoring
+pval = deg_NK$p_val_adj
+names(pval) = rownames(deg_NK)
+fb = fitBumModel(pval)
+scores_all <- scoreNodes(network = gene_network_NK_background, fb = fb, fdr = 1e-6)
+scores_all <- scores_all[!is.na(scores_all)]
+module_NK <- runFastHeinz(network = gene_network_NK_background, scores = scores_all)
+deg_NK_subset = subset(deg_NK, rownames(deg_NK) %in% as.character(V(module_NK)$name))
+logFC_NK = deg_NK_subset$avg_log2FC
+names(logFC_NK) = rownames(deg_NK_subset)
+
+#Add logFC slot for viz
+V(module_NK)$logFC = 0 
+
+#ssign logFC
+for (node_name in names(logFC_NK)) {
+  if (node_name %in% V(module_NK)$name) {
+    node_id <- which(V(module_NK)$name == node_name)
+    V(module_NK)$logFC[node_id] = logFC_NK[[node_name]]  
+  }
+}
+
+set.seed(100) #for reproducing the layout
+p19 = ggraph(module_NK, layout = 'kk') +
+  geom_edge_link(edge_color = "grey",
+                 aes(alpha = after_stat(index)),
+                 show.legend = FALSE) +
+  geom_node_point(aes(size = score, color = logFC)) +
+  scale_color_gradient2(low = "#75bca9",
+                        mid = "white",
+                        high = "#ef7923") +  
+  geom_node_text(aes(label = name,), repel = T, max.overlaps = Inf, fontface = "italic", size = 5) +
+  scale_size_continuous(name = "Functional \n Node \n Score") + 
+  theme_void()
+
+ggsave("3D.pdf", plot = p19, path = path_fig, width = 8, height = 7)
+
+```
+
+##3E Dotplot Pathways from NK cells
+```{r}
+NK_Narrow_KEGG = read.xlsx("Source_Data_Figure_3.xlsx", sheet = "NK_Narrow_KEGG")
+CD4T_Narrow_KEGG = read.xlsx("Source_Data_Figure_3.xlsx", sheet = "CD4T_Narrow_KEGG")
+CD8T_Narrow_KEGG = read.xlsx("Source_Data_Figure_3.xlsx", sheet = "CD8T_Narrow_KEGG")
+B_Narrow_KEGG = read.xlsx("Source_Data_Figure_3.xlsx", sheet = "B_Narrow_KEGG")
+PB_Narrow_KEGG = read.xlsx("Source_Data_Figure_3.xlsx", sheet = "PB_Narrow_KEGG")
+CD16Mono_Narrow_KEGG = read.xlsx("Source_Data_Figure_3.xlsx", sheet = "CD16Mono_Narrow_KEGG")
+CD14Mono_Narrow_KEGG = read.xlsx("Source_Data_Figure_3.xlsx", sheet = "CD14Mono_Narrow_KEGG")
+ProlifLymph_Narrow_KEGG = read.xlsx("Source_Data_Figure_3.xlsx", sheet = "ProlifLymph_Narrow_KEGG")
+
+
+NK_pathway = NK_Narrow_KEGG[,c("fdr", "description","number_of_genes")]
+NK_pathway$`Cell Type` = "NK"
+
+CD4T_pathway = CD4T_Narrow_KEGG[,c("fdr", "description","number_of_genes")]
+CD4T_pathway$`Cell Type` = "CD4T"
+
+CD8T_pathway = CD8T_Narrow_KEGG[,c("fdr", "description","number_of_genes")]
+CD8T_pathway$`Cell Type` = "CD8T"
+
+B_pathway = B_Narrow_KEGG[,c("fdr", "description","number_of_genes")]
+B_pathway$`Cell Type` = "B"
+
+PB_pathway = PB_Narrow_KEGG[,c("fdr", "description","number_of_genes")]
+PB_pathway$`Cell Type` = "PB"
+
+CD16Mono_pathway = CD16Mono_Narrow_KEGG[,c("fdr", "description","number_of_genes")]
+CD16Mono_pathway$`Cell Type` = "CD16 Monocyte"
+
+CD14Mono_pathway = CD14Mono_Narrow_KEGG[,c("fdr", "description","number_of_genes")]
+CD14Mono_pathway$`Cell Type` = "CD14 Monocyte"
+
+ProlifLymph_pathway = ProlifLymph_Narrow_KEGG[,c("fdr", "description","number_of_genes")]
+ProlifLymph_pathway$`Cell Type` = "Prolif Lymph"
+
+#keep only pathways found in NK
+CD4_add = CD4T_pathway[CD4T_pathway$description %in% NK_pathway$description,]
+CD8_add = CD8T_pathway[CD8T_pathway$description %in% NK_pathway$description,]
+B_add = B_pathway[B_pathway$description %in% NK_pathway$description,]
+PB_add = PB_pathway[PB_pathway$description %in% NK_pathway$description,]
+CD14_add = CD14Mono_pathway[CD14Mono_pathway$description %in% NK_pathway$description,]
+CD16_add = CD16Mono_pathway[CD16Mono_pathway$description %in% NK_pathway$description,]
+ProlifLymph_add = ProlifLymph_pathway[ProlifLymph_pathway$description %in% NK_pathway$description,]
+
+pathways = rbind(NK_pathway, CD4_add, CD8_add, B_add, PB_add, CD14_add, CD16_add, ProlifLymph_add) 
+pathways$fdr_log = -log(pathways$fdr)
+pathways$description = as.factor(pathways$description)
+pathway_wide = subset(pathways, select = -c(fdr, number_of_genes))
+pathway_wide <- pathway_wide %>%
+  spread(key = `Cell Type`, value = fdr_log)
+rownames(pathway_wide) = pathway_wide$description
+pathway_wide = subset(pathway_wide, select = -c(description))
+
+#row order for hierarchical clustering
+heat = Heatmap(as.matrix(pathway_wide), na_col = "grey", cluster_rows = T, cluster_columns = T)
+row = row_order(heat)
+pathway_wide = pathway_wide[row,]
+pathway_wide$description = rownames(pathway_wide)
+
+
+pathway_long = pivot_longer(pathway_wide, 
+                            cols = -c("description"),
+                            names_to = "Cell Type",
+                            values_to="log FDR")
+pathway_merge = merge(pathway_long, pathways, by = c("description", "Cell Type"), all.x = T)
+pathway_merge$`Cell Type` = factor(
+  pathway_merge$`Cell Type`,
+  levels = c(
+    "NK",
+    "PB",
+    "CD4T",
+    "CD8T",
+    "CD14 Monocyte",
+    "CD16 Monocyte",
+    "Prolif Lymph"
+  )
+)
+pathway_merge$description[pathway_merge$description == "Kaposi's sarcoma-associated herpesvirus infection"] =
+  "Kaposi's sarcoma-associated \n herpesvirus infection"
+
+
+p20 = ggplot(
+  pathway_merge,
+  aes(
+    y = description,
+    x = `Cell Type`,
+    size = number_of_genes,
+    color = `log FDR`
+  )
+) +
+  geom_point() +
+  scale_size_continuous(range = c(0, 18)) +  
+  scale_color_gradientn(colors = pnw_palette("Starfish", 5),
+                        breaks = c(0, 10, 20, 30 , 40)) +  
+  labs(x = "Cell Type",
+       y = "KEGG Pathway",
+       size = "Number of Genes \n Represented",
+       color = "-log10(FDR)")  +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(
+      angle = 30,
+      hjust = 1,
+      size = 22,
+      color = "black"
+    ),
+    axis.text.y = element_text(size = 22, color = "black"),
+    axis.title = element_text(size = 24, color = "black", face = "bold"),
+    legend.title = element_text(size = 20, color = "black", face = "bold"),
+    legend.text = element_text(size = 20, color = "black")
+  )  
+ggsave("3E.pdf", plot = p20, width = 14, height = 10, path = path_fig)
+
+```
+
+
+##3F Heatmap DESeq2 Correlation of Genes with Breadth Score in Pseudobulked samples
+```{r}
+#Subset QC metrics for raw data input to DESeq2
+seu = subset(scNKcovid, subset = nFeature_RNA > 300 & nFeature_RNA < 4000 &
+               nCount_RNA < 10000 & percent.mt < 15 & percent.mt >1 & percent.rps >.5
+             & percent.rps < 7 &percent.rpl > .5 & percent.rpl <7.5 & 
+               percent.rrna < 50 & percent.rrna > 3)
+
+#Pseudobulk
+count_data = AggregateExpression(seu, assays = 'RNA', group.by = "Donor", slot = "counts", return.seurat = T)
+nCount_RNA = count_data@meta.data
+nCount_RNA = subset(nCount_RNA, select = -c(nFeature_RNA, orig.ident))
+count_data = as.data.frame(GetAssayData(object = count_data, slot = "counts"))
+
+
+coldata = seu@meta.data
+coldata = coldata %>%
+  as.data.frame() %>%
+  dplyr::select(Donor, Breadth, Score,Severity.max.final) %>% 
+  unique()
+rownames(coldata) = coldata$Donor
+coldata$Score = as.numeric(as.character(coldata$Score))
+
+#create DESeq object 
+dds = DESeqDataSetFromMatrix(countData = round(count_data), colData = coldata, 
+                             design = ~ Score)
+keep <- rowSums(counts(dds)) > 1
+dds <- dds[keep,]
+
+#run DEseq
+dds = DESeq(dds)
+res = results(dds, 
+               name = "Score",
+               alpha = 0.05)
+res_tbl = res %>%
+  data.frame() %>%
+  rownames_to_column(var = "gene") %>%
+  as_tibble() %>%
+  arrange(padj)
+
+#write.xlsx(res_tbl, paste0(path_fig, "pseudobulk_NK_regression.xlsx")) 
+
+sig_genes_nk = subset(res_tbl, padj < .05)
+genes_heatmap = sig_genes_nk$gene
+
+sig_matrix = t(as.data.frame(count_data[genes_heatmap,]))
+sig_matrix = merge(sig_matrix, nCount_RNA, by = "row.names")
+rownames(sig_matrix) = sig_matrix$Row.names
+sig_matrix = subset(sig_matrix, select = -c(Row.names))
+sig_matrix = sig_matrix/sig_matrix[,"nCount_RNA"]
+sig_matrix = subset(sig_matrix, select = -c(nCount_RNA))
+sig_matrix = scale(sig_matrix)
+
+#metadata for annotation
+coldata$Score = as.character(coldata$Score)
+coldata = subset(coldata, select = -c(Donor))
+colnames(coldata)[1] = "Breadth Group" 
+colnames(coldata)[2] = "Breadth Score" 
+colnames(coldata)[3] = "Peak Severity" 
+coldata = coldata[order(coldata$`Breadth Score`),]
+sig_matrix = sig_matrix[match(rownames(coldata), rownames(sig_matrix)), ]
+#remove genes correlated with high score and RP genes
+sig_matrix = subset(sig_matrix, select = -c(UTS2, RPL10A, RPL5))
+
+score.cols = natparks.pals("Denali", 5)
+severity.cols = moma.colors("ustwo", n = 5)
+breadth.cols = moma.colors("Smith", n = 3)
+
+#Find overlap with breadth groups DEGs
+gene_overlap = data.frame(matrix(ncol = 0, nrow = 24))
+rownames(gene_overlap) = colnames(sig_matrix)
+overlap = rownames(gene_overlap) %in% deg_NK$Gene
+gene_overlap$`Breadth Group \n DEG Overlap` = overlap
+gene_overlap = gene_overlap[match(colnames(sig_matrix), rownames(gene_overlap)), , drop = FALSE]
+gene_overlap$`Breadth Group \n DEG Overlap` = factor(gene_overlap$`Breadth Group \n DEG Overlap`,
+                                                     levels = c("TRUE", "FALSE"))
+col_colors = columnAnnotation(df = coldata, 
+                           col = list("Breadth Group" = c("Narrow"= breadth.cols[1],
+                                                          "Broad" = breadth.cols[2]),
+                                      "Breadth Score" = c("0" = score.cols[1],
+                                                          "1" = score.cols[2],
+                                                          "2" = score.cols[3],
+                                                          "3" = score.cols[4],
+                                                          "4" = score.cols[5],
+                                                          "Healthy Controls" = "grey"), 
+                                      "Peak Severity" = c("1-3" = severity.cols[4],
+                                                          "4-5" = severity.cols[3],
+                                                          "6-7" = severity.cols[2],
+                                                          "8" = severity.cols[1],
+                                                          "0" = severity.cols[5])))
+
+overlap.cols = moma.colors("Koons", 2)
+row_colors <- rowAnnotation(
+  df = gene_overlap,
+  annotation_name_rot = 60,
+  col = list ("Breadth Group \n DEG Overlap" = c("TRUE" = overlap.cols[1], "FALSE" = overlap.cols[2])))
+
+
+sig_matrix = t(sig_matrix)
+p21 = Heatmap(
+  sig_matrix,
+  left_annotation = row_colors,
+  top_annotation = col_colors,
+  name = "Z-Score",
+  col = colorRamp2(
+    breaks = c(4, 3, 2, 1, 0, -1, -2, -3, -4),
+    colors = c(
+      diverging.cols[1],
+      diverging.cols[2],
+      diverging.cols[3],
+      diverging.cols[4],
+      diverging.cols[7],
+      diverging.cols[10],
+      diverging.cols[11],
+      diverging.cols[12],
+      diverging.cols[13]
+    )
+  ),
+  cluster_rows = T,
+  cluster_columns = F,
+  row_names_gp = gpar(fontface = "italic"),
+  column_names_gp = gpar(fontsize = 0),
+  width = unit(110, "mm"),
+  height = unit(100, "mm")
+)
+
+p21 = draw(p21, annotation_legend_side ="bottom" , heatmap_legend_side = "bottom")
+
+pdf(paste0(path_fig, "3F.pdf"), width =11, height=10)
+p21
+dev.off()
+
+
+```
+
+
+
+##3G Boxplot Narrow NK CyTOF
+```{r}
+nk.cells <- colnames(cyPBMC)[grep("^NK",(cyPBMC$annotated_clusters))]
+cyNKligand <- subset(cyPBMC, cells = nk.cells)
+nk_cytof = AverageExpression(cyNKligand, assays = 'protein', group.by = "patient_id", slot = "data")
+nk_cytof = as.data.frame(nk_cytof$protein)
+nk_cytof = t(nk_cytof)
+nk_cytof = subset(nk_cytof, select = c(`DR4-5`, `PAN-HLA`, CD8, `LLT-1`))
+nk_cytof = as.data.frame(nk_cytof)
+nk_cytof$patient_id = rownames(nk_cytof)
+nk_cytof = nk_cytof %>%
+  as.data.frame() %>%
+  pivot_longer(
+    cols = !patient_id,
+    names_to = "protein",
+    values_to = "expression"
+  ) 
+meta = cyNKligand@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, patient_id) %>% 
+  unique()
+rownames(meta) = meta$Donor
+nk_cytof = merge(nk_cytof, meta, by = "patient_id", all.x = T)
+nk_cytof$protein <- factor(nk_cytof$protein, levels = c("PAN-HLA", "DR4-5", "CD8", "LLT-1"))
+
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+p22 = ggboxplot(
+  nk_cytof,
+  x = "Breadth",
+  y = "expression",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 5
+  )
+) +
+  facet_wrap( ~ protein, scales = "free_y", ncol = 2) +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    p.adjust.methods = "bonferroni",
+    size = 7
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  theme_bw() +
+  labs(y = "Transformed MSI", x = "Breadth Group") +
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold", size = 24),
+    axis.text = element_text(color = "black", size = 22),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 22
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 24)
+  )
+ggsave("3G.pdf",plot = p22,  path = path_fig, height = 9, width = 10 )
+ 
+
+```
+
+#Figure 4
+##4A Boxplot Broad NK Cells scRNAseq
+```{r}
+path_fig = 'Figure 4/'
+
+nk.cell = colnames(scPBMC)[grep("^NK",scPBMC$celltype.l2)]
+scNK = subset(scPBMC, cells = nk.cell)
+scNK = SCTransform(scNK, vars.to.regress = c("percent.mt", "percent.rps", "percent.rpl", "percent.rrna", "nCount_RNA", "nFeature_RNA", "percent.hb"), verbose = FALSE)
+scNK = RunPCA(scNK, verbose = F)
+scNK = RunUMAP(scNK, verbose = F, dims = 1:50)
+scNK = FindNeighbors(scNK)
+ 
+nk_sc = AverageExpression(scNK, assays = 'RNA', group.by = "Donor", slot = "data")
+nk_sc = as.data.frame(nk_sc$RNA) %>% 
+  t() %>% 
+  subset(select = c(KLRC1,  MKI67, IL7R)) %>% 
+  as.data.frame()
+nk_sc$Donor = rownames(nk_sc)
+nk_sc = nk_sc %>%
+  as.data.frame() %>%
+  pivot_longer(
+    cols = !Donor,
+    names_to = "protein",
+    values_to = "expression"
+  ) 
+
+meta = scNK@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, Donor) %>% 
+  unique()
+rownames(meta) = meta$Donor
+nk_sc = merge(nk_sc, meta, by = "Donor", all.x = T)
+nk_sc$protein = factor(nk_sc$protein, levels = c("KLRC1", "MKI67","IL7R"))
+nk_sc$Breadth = factor(nk_sc$Breadth, levels =c("Healthy", "Narrow", "Broad"))
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+
+p23 = ggboxplot(
+  nk_sc,
+  x = "Breadth",
+  y = "expression",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap( ~ protein, scales = "free_y", ncol = 3) +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    vjust = .1,
+    size = 7
+  ) +
+  theme_bw() +
+  labs(y = "Average Expression", x = "Breadth Group") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold.italic", size = 24),
+    axis.text = element_text(color = "black", size = 20),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 26
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    aspect.ratio = 1
+  ) 
+ggsave("4A.pdf", plot = p23,  path = path_fig, height = 4.5, width = 13)
+```
+##4B Boxplots Broad NK CyTOF
+```{r}
+nk_cytof = AverageExpression(cyNK, assays = 'protein', group.by = "patient_id", slot = "data")
+nk_cytof = as.data.frame(nk_cytof$protein) %>% 
+  t() %>% 
+  subset(select = c(CD94, NKG2A, CD56, `Ki-67`)) %>% 
+  as.data.frame()
+nk_cytof$patient_id = rownames(nk_cytof)
+nk_cytof = pivot_longer(nk_cytof, cols = !patient_id, names_to = "protein", 
+                        values_to = "expression") 
+#Pull HLA-DR from ligand panel (from subsetted NK cells from ligand panel)
+nk_DR = AverageExpression(cyNKligand, assays = 'protein', group.by = "patient_id", slot = "data")
+nk_DR = as.data.frame(nk_DR$protein) %>% 
+  t() %>% 
+  subset(select = c(`HLA-DR`)) %>% 
+  as.data.frame()
+nk_DR$patient_id = rownames(nk_DR)
+nk_DR = pivot_longer(nk_DR, cols = !patient_id, names_to = "protein", 
+                     values_to = "expression") 
+nk_cytof = rbind(nk_cytof, nk_DR)
+
+meta_PBMC = cyPBMC@meta.data%>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, patient_id)
+meta_NK = cyNK@meta.data%>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, patient_id)
+meta = rbind(meta_PBMC, meta_NK) %>% 
+  unique()
+rownames(meta) = meta$patient_id
+
+nk_cytof = merge(nk_cytof, meta, by = "patient_id", all.x = T)
+nk_cytof$protein <- factor(nk_cytof$protein, levels = c("CD94", "NKG2A", "CD56", "Ki-67", "HLA-DR"))
+
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+p24 = ggboxplot(
+  nk_cytof,
+  x = "Breadth",
+  y = "expression",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap( ~ protein, scales = "free_y", ncol = 5) +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    p.adjust.methods = "bonferroni",
+    size = 7
+  ) +
+  theme_bw() +
+  labs(y = "Transformed MSI", x = "Breadth Group") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold", size = 24),
+    axis.text = element_text(color = "black", size = 20),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 26
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    aspect.ratio = 1
+  )+ NoLegend()
+ggsave("4B.pdf",plot = p24,  path = path_fig, height = 4.5, width = 20 )
+
+```
+##4C Boxplot HLA-Bw4 CyTOF
+```{r}
+cytof_hla = AverageExpression(cyPBMC, assays = 'protein', group.by = c("patient_id", "annotated_clusters"), slot = "data")
+cytof_hla = as.data.frame(cytof_hla$protein) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  subset(select = c(`HLA-Bw4`, `HLA-Bw6`))
+cytof_hla$cell_type <- sub(".*_", "", rownames(cytof_hla))
+new_row_names <- sub("_(.*)", "", rownames(cytof_hla))
+cytof_hla$patient_id <- new_row_names
+rownames(cytof_hla) = NULL
+
+meta = cyPBMC@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, patient_id) %>% 
+  unique()
+cytof_hla = cytof_hla[cytof_hla$patient_id %in% meta$patient_id,]
+
+cytof_hla = merge(cytof_hla, meta, by = "patient_id", all.x = T)
+colnames(cytof_hla)[2] = "HLABw4"
+colnames(cytof_hla)[3] = "HLABw6"
+cytof_hla$cell_type <- gsub("Other Myeloid Cells", "Other Myeloid", cytof_hla$cell_type)
+cytof_hla_bw4 = subset(cytof_hla, select = -c(HLABw6))
+#save bw6 for extended data 
+cytof_hla_bw6 = subset(cytof_hla, select = -c(HLABw4))
+
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+
+p25 = ggboxplot(
+  cytof_hla_bw4,
+  x = "Breadth",
+  y = "HLABw4",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap( ~ cell_type, nrow = 1, scales = "free_y") +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    vjust = 0.2,
+    size = 8
+  ) +
+  theme_bw() +
+  labs(y = "HLA-Bw4 Expression \n (Tansformed MSI)", x = "Breadth Group")+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold", size = 20),
+    axis.text = element_text(color = "black", size = 20),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 26
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    axis.text.x = element_text(
+      angle = 25,
+      vjust = 1,
+      hjust = 1
+    )
+  )+NoLegend()
+
+ggsave("4C.pdf",plot = p25,  path = path_fig, height = 5, width = 24 )
+```
+##4D Boxplot Broad Neutralizer pathways
+```{r}
+
+#Extended Data Table 2, Tab NK_Broad_KEGG 
+rownames(NK_Broad_KEGG) = NK_Broad_KEGG$description
+scNK = AddModuleScore(scNK, features = (strsplit(NK_Broad_KEGG["Glycolysis / Gluconeogenesis", "preferredNames"],",")), name = "Glycolosis.Gluconegenesis", nbin = 21)
+scNK$Glycolosis.Gluconegenesis = scNK$Glycolosis.Gluconegenesis1
+scNK$Glycolosis.Gluconegenesis1 = NULL
+
+
+scNK = AddModuleScore(scNK, features = (strsplit(NK_Broad_KEGG["Biosynthesis of amino acids", "preferredNames"],",")), name = "Biosynthesis.Amino.Acids", nbin = 21)
+scNK$Biosynthesis.Amino.Acids = scNK$Biosynthesis.Amino.Acids1
+scNK$Biosynthesis.Amino.Acids1 = NULL
+
+scNK = AddModuleScore(scNK, features = (strsplit(NK_Broad_KEGG["Hematopoietic cell lineage", "preferredNames"],",")), name = "Hematopoietic.cell.lineage", nbin = 21)
+scNK$Hematopoietic.cell.lineage = scNK$Hematopoietic.cell.lineage1
+scNK$Hematopoietic.cell.lineage1 = NULL
+
+scNK = AddModuleScore(scNK, features = (strsplit(NK_Broad_KEGG["Pyruvate metabolism", "preferredNames"],",")), name = "Pyruvate.metabolism", nbin = 21)
+scNK$Pyruvate.metabolism = scNK$Pyruvate.metabolism1
+scNK$Pyruvate.metabolism1 = NULL
+
+features = c("Glycolosis.Gluconegenesis", "Biosynthesis.Amino.Acids", "Hematopoietic.cell.lineage", "Pyruvate.metabolism")
+
+#average donor expression of each module
+pathway_broad = FetchData(scNK, vars = features, slot = "data")
+pathway_broad <- aggregate(pathway_broad, by = list(scNK@meta.data[,"Donor"]), FUN = "mean")
+colnames(pathway_broad) = c("Donor", "Glycolosis and\nGluconegenesis", 
+                            "Biosynthesis of\nAmino Acids", 
+                            "Hematopoietic\nCell Lineage", "Pyruvate\nMetabolism")
+
+
+pathway_broad = pathway_broad %>%
+  as.data.frame() %>%
+  pivot_longer(
+    cols = !Donor,
+    names_to = "pathway",
+    values_to = "expression"
+  ) 
+
+meta = scNK@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, Donor) %>% 
+  unique()
+pathway_broad = merge(pathway_broad, meta, by = "Donor", all.x = T)
+pathway_broad$Breadth = factor(pathway_broad$Breadth, levels = c("Healthy", "Narrow", "Broad"))
+
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+p26 = ggboxplot(
+  pathway_broad,
+  x = "Breadth",
+  y = "expression",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap( ~ pathway, scales = "free_y", ncol = 5) +
+  theme_bw() +
+  labs(y = "Average Expression", x = "Breadth Group") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold", size = 24),
+    axis.text = element_text(color = "black", size = 20),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 26
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    aspect.ratio = 1
+  )+
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    size = 7
+  ) +NoLegend()
+ggsave("4D.pdf",plot = p26,  path = path_fig, height = 6, width = 19 )
+```
+
+#Figure 5 
+##5A UMAP NK Cell clusters scRNAseq
+```{r}
+path_fig = 'Figure 5/'
+
+#rename clusters
+cluster_ids = c("C0", "C1", "C2", "C3", "C4")
+names(cluster_ids) = c(0, 1, 2, 3, 4)
+scNKcovid$seurat_clusters <- mapvalues(scNKcovid$seurat_clusters, from = names(cluster_ids), to = cluster_ids)
+scNKcovid$seurat_clusters = factor(scNKcovid$seurat_clusters, levels = c("C0", "C1", "C2", "C3", "C4"))
+
+cluster.cols = met.brewer("Hokusai3", 5)
+names(cluster.cols) = c("C0","C1", "C2", "C3", "C4")
+
+p27 = DimPlot(scNKcovid,
+              group.by = "seurat_clusters",
+              reduction = "umap",
+              cols = cluster.cols) +
+  ggtitle("NK Cell Clusters") +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 24),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        aspect.ratio = 1,
+        legend.text = element_text(size = 18),
+        axis.title = element_text(size = 20)) +
+  xlab("UMAP 2") +
+  ylab("UMAP 1")
+
+ggsave("5A.pdf", plot = p27, device = "pdf", path = path_fig, width = 5, height = 5)
+```
+##5B Boxplot Relative proportions of clusters
+```{r}
+meta = scNKcovid@meta.data
+fq = prop.table(table(scNKcovid$seurat_clusters, meta$Donor), 2) *100
+fq = reshape2::melt(fq, value.name = "Freq", varnames = c("seurat_clusters", "Donor"))     
+fq = na.omit(fq)
+meta_add = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, Donor) %>% 
+  unique()
+rownames(meta_add) = meta_add$Donor
+fq = left_join(fq, meta_add, by = "Donor")
+fq$Freq = as.numeric(fq$Freq)
+fq$seurat_clusters = as.factor(fq$seurat_clusters)
+fq$Breadth= factor(fq$Breadth, levels = c("Broad", "Narrow"))
+
+my_comparisons.current <- list(c("Broad","Narrow"))
+
+p28 = ggboxplot(
+  fq,
+  x = "Breadth",
+  y = "Freq",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap( ~ seurat_clusters,  ncol = 5) +
+  theme_bw() +
+  labs(y = "% NK Cells", x = "Breadth Group") +
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold", size =20),
+    axis.text = element_text(color = "black", size = 16),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 18
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 16),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_blank()
+  ) +
+  scale_shape_manual(values = c(17, 15)) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))
+p28 = p28 + stat_compare_means(
+  aes(group = 1),
+  method = "wilcox",
+  comparisons = my_comparisons.current,
+  label = "p.format",
+  size = 5
+)
+ggsave("5B.pdf", plot = p28, path = path_fig, width = 12, height = 5)
+```
+##5C Heatmap NK Cell Cluster Expression
+```{r}
+nk_sc = AverageExpression(scNKcovid, assays = 'RNA', group.by = "seurat_clusters", slot = "data")
+nk_sc = as.data.frame(nk_sc$RNA) %>% 
+  t() %>% 
+  subset(select = c(PRF1, MKI67, CD38, CD69, FASLG, GZMB, NCAM1, FCGR3A, LAMP1, KLRK1, NCR3, IFNG, TGFB1, CX3CR1, B3GAT1, KLRC2, SYK, SH2D1B, ZBTB16))%>% 
+  scale() %>% 
+  t()
+
+cluster.cols = met.brewer("Hokusai3", 5)
+row_colors = rowAnnotation("NK Cell Cluster" = colnames(nk_sc), 
+                           col = list("NK Cell Cluster" = c("C0" = cluster.cols[1],
+                                                          "C1" = cluster.cols[2],
+                                                          "C2" = cluster.cols[3],
+                                                          "C3" = cluster.cols[4],
+                                                          "C4" = cluster.cols[5])),
+  annotation_name_rot = 45)
+
+
+nk_sc = t(nk_sc)
+p29 = Heatmap(nk_sc, 
+            left_annotation = row_colors,
+            name = "Z-Score",
+            col = colorRamp2(breaks = c(2,1.5,1,.5,0,-.5,-1,-1.5,-2),
+                             colors = c(diverging.cols[1],
+                                        diverging.cols[3],
+                                        diverging.cols[4],
+                                        diverging.cols[5],
+                                        diverging.cols[7],
+                                        diverging.cols[9],
+                                        diverging.cols[10],
+                                        diverging.cols[11],
+                                        diverging.cols[13])),
+            cluster_rows = T,
+            cluster_columns = T,
+            column_names_gp = gpar(fontface = "italic"),
+            column_names_rot = 45,
+            width = unit(100, "mm"),
+            height = unit(40, "mm"),
+            row_names_gp = gpar(fontsize = 0) )
+
+pdf(file = paste0(path_fig, "5C.pdf"),width = 6.5,height = 5)
+p29
+dev.off()
+```
+
+
+##5D Violin plot NK Exhaustion by cluster
+```{r}
+scNKcovid = AddModuleScore(scNKcovid, features = list(c("HAVCR2", "PDCD1","LAG3")), name = "NKexh", nbin = 22)
+exh_clusters = scNKcovid@meta.data %>% 
+  as.data.frame() %>%
+  dplyr::select(seurat_clusters, NKexh1)
+
+cluster.cols = met.brewer("Hokusai3", 5)
+names(cluster.cols) = c("C0", "C1", "C2", "C3", "C4")
+
+
+p30 = ggplot(exh_clusters,
+             aes(x = seurat_clusters, y = NKexh1, fill = seurat_clusters)) +
+  geom_violin() +
+  labs(x = "Cluster", y = "Gene Expression") +
+  scale_fill_manual(values = cluster.cols) +
+  theme_bw() +
+  labs(x = "NK Cell Cluster", y = "Exhaustion Score", title = "NK Exhaustion") +
+  NoLegend() +
+  theme(
+    strip.text = element_text(face = "bold"),
+    axis.text = element_text(color = "black", size = 24),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 24
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    plot.title = element_text(hjust = .5, size = 30, face = "bold")
+  )
+  
+ggsave("5D.pdf",plot = p30,  path = path_fig, height = 5.5, width = 6, device = "pdf")
+
+```
+
+##5E UMAP cytoTRACE2
+```{r}
+cytotrace2_result <- cytotrace2(scNKcovid, is_seurat = T, slot_type = "counts", species = 'human')
+
+p31 = FeaturePlot(cytotrace2_result, "CytoTRACE2_Relative", reduction = "umap") +
+  scale_colour_gradientn(
+    colours = (met.brewer("Hiroshige")),
+    na.value = "transparent",
+    limits = c(0, 1),
+    breaks = seq(0, 1, by = 0.2),
+    labels = c("0.0 (More diff.)", "0.2", "0.4", "0.6", "0.8", "1.0 (Less diff.)"),
+    name = "Relative\norder \n" ,
+    guide = guide_colorbar(ticks.colour = "black")
+  ) +
+  ggtitle("CytoTRACE 2") +
+  xlab("UMAP 1") +
+  ylab("UMAP 2") +
+  theme(
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 16, face = "bold"),
+    axis.text = element_blank(),
+    axis.title = element_text(size = 16),
+    plot.title = element_text(
+      size = 24,
+      face = "bold",
+      hjust = 0.5
+    ),
+    aspect.ratio = 1,
+    axis.ticks = element_blank()
+  ) 
+ggsave("5E.pdf",plot = p31,  path = path_fig, height = 5, width = 6, device = "pdf")
+```
+##5F Boxplot Differentiation score of each cluster
+```{r}
+#pull cytotrace scores for each cell
+potency_clusters = cytotrace2_result@meta.data %>% 
+  as.data.frame() %>%
+  dplyr::select(seurat_clusters, CytoTRACE2_Score)
+#order plot by decreasing median potenct
+potency_clusters$seurat_clusters = factor(potency_clusters$seurat_clusters, levels = c("C1", "C3", "C4", "C2", "C0"))
+
+p29 = ggplot(potency_clusters, aes(x = seurat_clusters, y = CytoTRACE2_Score)) +
+  geom_boxplot(
+    aes(fill = seurat_clusters),
+    width = 0.8,
+    alpha = 0.8,
+    outlier.shape = NA
+  ) +
+  geom_jitter(
+    aes(fill = seurat_clusters),
+    width = 0.05,
+    height = 0,
+    alpha = 0.5,
+    shape = 21,
+    stroke = 0.1,
+    size = 1
+  ) +
+  theme_classic() +
+  scale_y_continuous(
+    breaks = seq(0, 1, by = 0.2),
+    limits = c(0, 1),
+    sec.axis = sec_axis(
+      trans = ~ .,
+      breaks = seq(0, 1, by = 1 / 12),
+      labels = c(
+        "",
+        'Differentiated',
+        "",
+        'Unipotent',
+        "",
+        'Oligopotent',
+        "",
+        'Multipotent',
+        "",
+        'Pluripotent',
+        "",
+        'Totipotent',
+        ""
+      )
+    )
+  ) +
+  scale_fill_manual(values = cluster.cols) +
+  scale_x_discrete(
+    labels = function(x)
+      str_wrap(x, width = 10)
+  )  +
+  labs(x = "NK Cell Cluster", y = 'Potency score') +
+  ggtitle("Developmental Potential") +
+  theme(
+    legend.position = "None",
+    axis.text = element_text(size = 20, color = "black"),
+    axis.title = element_text(size = 24, face = "bold"),
+    legend.text = element_text(size = 16),
+    plot.title = element_text(
+      size = 24,
+      face = "bold",
+      hjust = 0.5,
+      margin = margin(b = 20)
+    ),
+    axis.ticks.y.right  = element_line(
+      color = c(
+        "black",
+        NA,
+        "black",
+        NA,
+        "black",
+        NA,
+        "black",
+        NA,
+        "black",
+        NA,
+        "black",
+        NA,
+        "black"
+      )
+    ),
+    aspect.ratio = 0.8,
+    axis.ticks.length.y.right  = unit(0.3, "cm")
+  )
+
+ggsave("5F.pdf",plot = p29,  path = path_fig, height = 6, width = 7.5, device = "pdf")
+
+```
+
+
+#Figure 6
+##6A Boxplot Monocyte cyTOF
+```{r}
+path_fig = 'Figure 6/'
+
+Mono.cells <- colnames(cyPBMC)[grep("^CD16|^CD14",(cyPBMC$annotated_clusters))]
+cyMono <- subset(cyPBMC, cells = Mono.cells)
+Mono_Ligands = AverageExpression(cyMono, assays = 'protein', group.by = "patient_id", slot = "data")
+Mono_Ligands = as.data.frame(Mono_Ligands$protein) %>% 
+  t() %>% 
+  subset(select = c(`ULBP-1-2-5-6`, `LLT-1`, CD112, CD155)) %>% 
+  as.data.frame()
+Mono_Ligands$patient_id = rownames(Mono_Ligands)
+Mono_Ligands = pivot_longer(Mono_Ligands, cols = !patient_id, names_to = "protein", 
+                        values_to = "expression") 
+
+meta = cyMono@meta.data%>%
+  as.data.frame() %>%
+  select(Severity.max.final, acuity, Breadth, patient_id) %>% 
+  unique()
+rownames(meta) = meta$patient_id
+
+Mono_Ligands = merge(Mono_Ligands, meta, by = "patient_id", all.x = T)
+Mono_Ligands$protein <- factor(Mono_Ligands$protein, levels = c("ULBP-1-2-5-6", "LLT-1", "CD112", "CD155"))
+
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+p30 = ggboxplot(
+  Mono_Ligands,
+  x = "Breadth",
+  y = "expression",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 5
+  )
+) +
+  facet_wrap( ~ protein, scales = "free_y", ncol = 2) +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    p.adjust.methods = "bonferroni",
+    size = 8
+  ) +
+  theme_bw() +
+  labs(y = "Transformed MSI", x = "Breadth Group") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  ggtitle("Monocytes")+
+  theme(
+    strip.text = element_text(face = "bold", size = 32),
+    axis.text = element_text(color = "black", size = 24),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 32
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    aspect.ratio = 1,
+    title = element_text(size = 36)
+  )+ NoLegend()
+ggsave("6A.pdf",plot = p30,  path = path_fig, height = 12, width = 12 , device = "pdf")
+
+```
+
+##6B Boxplot NK CyTOF
+```{r}
+#Expression from ligand panel
+nk_cytof1 = AverageExpression(cyNKligand, assays = 'protein', group.by = "patient_id", slot = "data")
+nk_cytof1 = as.data.frame(nk_cytof1$protein) %>% 
+  t() %>% 
+  subset(select = c(CD161)) %>% 
+  as.data.frame()
+nk_cytof1$patient_id = rownames(nk_cytof1)
+
+nk_cytof1 = nk_cytof1 %>%
+  as.data.frame() %>%
+  pivot_longer(
+    cols = !patient_id,
+    names_to = "protein",
+    values_to = "expression"
+  ) 
+#Expression from NK panel
+nk_cytof = AverageExpression(cyNK, assays = 'protein', group.by = "patient_id", slot = "data")
+nk_cytof = as.data.frame(nk_cytof$protein) %>% 
+  t() %>% 
+  subset(select = c(NKG2D, `DNAM-1`, TIGIT, CD96)) %>% 
+  as.data.frame()
+nk_cytof$patient_id = rownames(nk_cytof)
+nk_cytof = nk_cytof %>%
+  as.data.frame() %>%
+  pivot_longer(
+    cols = !patient_id,
+    names_to = "protein",
+    values_to = "expression"
+  ) 
+#keep only patients in NK cell panel
+nk_cytof1 = nk_cytof1[nk_cytof1$patient_id %in% nk_cytof$patient_id,]
+nk_cytof = rbind(nk_cytof1, nk_cytof)
+
+meta = cyNK@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, patient_id) %>% 
+  unique()
+
+nk_cytof = merge(nk_cytof, meta, by = "patient_id", all.x = T)
+nk_cytof$protein <- factor(nk_cytof$protein, levels = c("CD161", "NKG2D", "DNAM-1", "TIGIT", "CD96"))
+
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+p31 = ggboxplot(
+  nk_cytof,
+  x = "Breadth",
+  y = "expression",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 5
+  )
+) +
+  facet_wrap( ~ protein, scales = "free_y") +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    label = "p.format",
+    position = "dodge" ,
+    p.adjust.methods = "bonferroni",
+    size = 8
+  ) +
+  theme_bw() +
+  labs(y = "Transformed MSI", x = "Breadth Group", title = "NK Cells") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  ggtitle("NK Cells") +
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "", size =8)),
+    shape = guide_legend("Acuity", override.aes = aes(label = "", size = 8))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold", size = 32),
+    axis.text = element_text(color = "black", size = 24),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 32
+    ),
+    legend.title = element_text(face = "bold", size = 28),
+    legend.text = element_text(size = 28),
+    strip.background = element_blank(),
+    aspect.ratio = 1,
+    title = element_text(size = 36)
+  ) 
+ggsave("6B.pdf",plot = p31,  path = path_fig, height = 12, width = 20, device = "pdf")
+ 
+```
+
+
+
+##6D Circos Multinichenet
+```{r}
+#Code to generate multinichenet output is in multinichenet.R
+AlltoNK = read.xlsx('Source_Data_Figure_6.xlsx')
+
+
+#Circos plot of top-prioritized links
+prioritized_tbl_oi_all = get_top_n_lr_pairs(AlltoNK$prioritization_tables, 50, rank_per_group = FALSE)
+prioritized_tbl_oi = AlltoNK$prioritization_tables$group_prioritization_tbl %>%
+  filter(id %in% prioritized_tbl_oi_all$id) %>%
+  distinct(id, sender, receiver, ligand, receptor, group) %>% left_join(prioritized_tbl_oi_all)
+prioritized_tbl_oi$prioritization_score[is.na(prioritized_tbl_oi$prioritization_score)] = 0
+
+senders_receivers = union(prioritized_tbl_oi$sender %>% unique(), prioritized_tbl_oi$receiver %>% unique()) %>% sort()
+
+#write.xlsx(prioritized_tbl_oi_all,"/Users/izumidk/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/COVID /SARS-CoV-2 Pseudovirus/Analysis/NewBreadthScores/MultiNicheNetR/allNK.xlsx")
+
+
+colors_sender = c(cell.cols[["B"]],
+                  cell.cols[["CD14 Monocyte"]],
+                  cell.cols[["CD16 Monocyte"]],
+                  cell.cols[["CD4 T"]],
+                  cell.cols[["CD8 T"]],
+                  cell.cols[["DC"]],
+                  cell.cols[["NK"]],
+                  cell.cols[["PB"]],
+                  cell.cols[["pDC"]],
+                  cell.cols[["Platelet"]],
+                  cell.cols[["Prolif Lymph"]])%>% magrittr::set_names(senders_receivers)
+  
+colors_receiver = colors_sender
+
+p32 = make_circos_group_comparison(prioritized_tbl_oi, colors_sender, colors_receiver)
+pdf(paste0(path_fig, "/6CandD.pdf"))
+p32
+dev.off()
+
+
+```
+##6E Scatter plot B Cell NK Cell Correlation
+```{r}
+
+cell_counts = scPBMCcovid@meta.data %>%
+  group_by(!!sym("Donor")) %>%
+  summarise(
+    total_cells = n(),
+    PB = sum(!!sym("celltype.l2") == "Plasmablast"),
+    mem = sum(!!sym("celltype.l2") == "B memory"),
+    naive = sum(!!sym("celltype.l2") == "B naive"),
+    int = sum(!!sym("celltype.l2") == "B intermediate"),
+    B_total = sum(!!sym("manual.coarse.idents") == "B"),
+    nk_cells = sum(!!sym("manual.coarse.idents") == "NK")
+  ) %>%
+  mutate(
+    Plasmablast = 100 * PB / total_cells,
+    `B Memory` = 100 * mem / total_cells,
+    `B Naive` = 100 * naive / total_cells,
+    `B Intermediate` = 100 * int / total_cells,
+    `Total B` = 100 * B_total / total_cells,
+    NK = 100 * nk_cells / total_cells
+  )
+
+meta_add = scPBMCcovid@meta.data %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Donor, Breadth) %>% 
+  unique()
+
+cell_counts = left_join(cell_counts, meta_add, by = "Donor")
+
+
+cell_counts = cell_counts %>%
+  select(Donor, NK, Plasmablast, `B Memory`, `B Naive`, `B Intermediate`, `Total B`, Severity.max.final, acuity, Breadth) %>%
+  pivot_longer(
+    cols = -c(Donor, NK, Severity.max.final, acuity, Breadth),
+    names_to = "B_type",
+    values_to = "percent_b"
+  )
+
+cell_counts$B_type = factor(cell_counts$B_type, levels = c("B Naive","B Intermediate","B Memory", "Plasmablast","Total B"))
+breadth.cols = moma.colors("Smith", n = 3)
+names(breadth.cols) = c("Narrow", "Broad", "Healthy")
+
+p33 = ggplot(cell_counts, aes(x = NK, y = percent_b, color = Breadth, shape = acuity)) +
+  facet_wrap( ~ B_type, ncol = 5, scales = "free_y") +
+  theme_bw() +
+  geom_jitter(size = 3,
+              width = 0,
+              height = 0) +
+  geom_smooth(method = 'lm', aes(group = 1), color = "black")+
+  scale_shape_manual(values = c(17, 15)) +
+  scale_color_manual(values = breadth.cols)+
+  guides(
+    color = guide_legend("Breadth Group", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  )+
+  stat_cor(mapping = aes(group = 1),
+           method = "pearson",
+           size = 6) +
+  labs(x = "NK (% of PBMC)",
+       y = "B Cell Subset\n(% of PBMC)"
+       ) +
+  theme(
+    axis.text = element_text(size = 14, color = "black"),
+    axis.title = element_text(face = "bold", size = 18),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 18, face = "bold"),
+    aspect.ratio = 1,
+    axis.line = element_line(color = "black"),
+    legend.title = element_text(face = "bold", size = 14),
+    legend.text = element_text(size = 12)
+  )
+
+ggsave("6E.pdf", plot = p33, device = "pdf", path = path_fig, height = 4, width = 16)
+
+```
+
+#Figure 7
+##7A is a biorender figure
+##7B Boxplot qPCR of NK Cells Activated with IFNa
+```{r}
+path_fig = 'Figure 7/'
+#Extended Data Table 5 Tab 7B
+table = read.xlsx('Source_Data_Figure_7.xlsx', sheet = "7B") %>% 
+  as.data.frame()
+table$Condition = mapvalues(table$Condition, from = c("IFNa"), to = "IFNα")
+table$Condition = factor(table$Condition, levels = 
+                       c("Unstim", "IFNα"))
+
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[2], stim.cols[9])
+names(stim.cols) = c("IFNα", "Unstim")
+
+my_comparisons.current = list(c("Unstim", "IFNα"))
+
+p34 = ggplot(table, aes(x = Condition, y = dCt, color = Condition))  +
+  geom_point(size = 3) +
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+  geom_boxplot(
+    aes(fill = Condition),
+    alpha = 0.3,
+    outlier.shape = NA,
+    position = position_dodge(width = 0.75)
+  ) +
+  theme_classic() +
+  labs(y = expression(bold(ΔCt ~ "(Relative to" ~ bolditalic("18S") * ")")),
+       x = "Stim") +
+  scale_color_manual(values = stim.cols) +
+  scale_fill_manual(values = stim.cols) +
+  scale_y_reverse()+
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_text(face = "bold", size = 18),
+    axis.title.x = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 18, face = "bold.italic"),
+  ) +
+  facet_wrap( ~ Gene, scales = "fixed", ncol = 4) +
+  stat_compare_means(
+    comparisons = my_comparisons.current,
+    method = "wilcox",
+    label = "p.format",
+    paired = T,
+    vjust = .5,
+    size = 5,
+    p.adjust.methods = "bonferroni"
+  )+NoLegend()
+ggsave("7B.pdf", plot = p34,device = "pdf", path = path_fig, height = 4, width = 7)
+
+
+```
+
+##7C Boxplots co-cultures % positive
+```{r}
+
+table_markers = read.xlsx('/Users/izumidk/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/Papers/COVID/Final Submission/For Submission zip/Source_Data_Figure_7.xlsx', sheet = "7C") 
+table_markers = as.data.frame(table_markers) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+table_markers$Condition = table_markers$Condition %>% 
+  mapvalues(from = c("IFNa", "IFNa NK only"), to = c("IFNα", "IFNα NK only")) %>%
+  factor(levels = c("Unstim NK only", "IFNα NK only", "Unstim", "IFNα"))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[2], stim.cols[7], stim.cols[5])
+names(stim.cols) = c("Unstim", "IFNα", "Unstim NK only", "IFNα NK only")
+mycomparisons = list(c("Unstim", "IFNα"), c("IFNα", "IFNα NK only"))
+
+
+table_markers$name = mapvalues(table_markers$name, from = c("Activated.(CD38+CD69+)"), to = c("Activated\n(CD38+CD69+)"))
+
+table_markers$name = factor(table_markers$name, levels = 
+                           c("CD107a+", "Perforin+","GZMB+",
+                             "Activated\n(CD38+CD69+)", "NKG2D+", "IFNg+"))
+
+
+p35 = ggplot(table_markers, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 3) +
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+  geom_boxplot(aes(fill = Condition),
+               alpha = 0.3,
+               outlier.shape = NA) +
+  theme_classic()+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13))) +
+  labs(y = "% of NK Cells") +
+  scale_color_manual(values = stim.cols) +
+  scale_fill_manual(values = stim.cols) +
+  facet_wrap( ~ name, scales = "free_y", ncol = 3) +
+  theme(
+    axis.text = element_text(size = 12, color = "black"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 16),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16, face = "bold"),
+    aspect.ratio = 1
+  ) +
+  stat_compare_means(
+    method = "wilcox.test",
+    paired = T,
+    comparisons = mycomparisons,
+    p.adjust.methods = "bonferroni",
+    size = 5,
+    label = "p.format"
+  ) +
+  NoLegend()
+
+ggsave("7C.pdf", plot = p35, path = path_fig, height = 6.5, width = 8.5, device = "pdf")
+
+#Make X-axis figure label
+mat <- matrix(c(
+  "–", "+", "–", "+",
+  "–", "–", "+", "+"),
+  nrow = 2, byrow = TRUE)
+
+rownames(mat) <- c("IFNα", "iTfh-like")
+
+tbl <- tableGrob(
+  mat,
+  theme = ttheme_minimal(
+    core = list(fg_params = list(fontface = "bold")),
+    colhead = list(fg_params = list(fontface = "bold")),
+    rowhead = list(fg_params = list(fontface = "bold"))
+  )
+)
+tbl$heights <- unit(rep(.9, nrow(tbl)), "lines")   
+tbl$widths <- unit(rep(1.2, ncol(tbl)), "cm")
+tbl$widths[1] <- unit(3.5, "cm")  
+
+pdf(paste0(path_fig, "7C_legend_labeled.pdf"), width = 3, height = 1)
+grid.draw(tbl)
+dev.off()
+
+#And an unlabeled version
+mat <- matrix(c(
+  "–", "–", "+", "+",
+  "–", "+", "–", "+"),
+  nrow = 2, byrow = TRUE)
+
+tbl <- tableGrob(
+  mat,
+  theme = ttheme_minimal(
+    core = list(fg_params = list(fontface = "bold")),
+    colhead = list(fg_params = list(fontface = "bold")),
+    rowhead = list(fg_params = list(fontface = "bold"))
+  )
+)
+tbl$heights <- unit(rep(.9, nrow(tbl)), "lines")   
+tbl$widths <- unit(rep(1.2, ncol(tbl)), "cm")
+
+pdf(paste0(path_fig, "7C_legend.pdf"), width = 2, height = 1)
+grid.draw(tbl)
+dev.off()
+
+
+
+```
+
+
+##7D Boxplot Killing Assay
+```{r}
+#Extended Data Figure 5, Tab 7D
+table_markers = read.xlsx('Source_Data_Figure_7.xlsx', sheet = "7D") %>% as.data.frame()
+
+table$Condition = table$Condition %>% 
+  mapvalues(from = c("IFNa"), to = c("IFNα")) %>%
+  factor(levels = c("Unstim", "IFNα"))
+
+table$`Target Cell` = mapvalues(table$`Target Cell`, from = c("iTfh"), to = c("iTfh-Like"))
+table$`Target Cell` = factor(table$`Target Cell`, levels = 
+                       c("iTfh-Like", "Activated", "Resting" ))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[3])
+names(stim.cols) = c("Unstim", "IFNα")
+mycomparisons = list(c("Unstim", "IFNα"))
+
+
+p36 = ggplot(table, aes(x = Condition, y = `Background Subtracted Killing`, color = Condition))  +
+  geom_point(size = 3)+
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5)+
+  geom_boxplot(aes(fill = Condition), alpha = 0.3, outlier.shape = NA)+
+  theme_classic()+
+  labs(y = "Background Subtracted Killing\n (% of Targets)")+
+  scale_color_manual(values = stim.cols)+
+  scale_fill_manual(values = stim.cols)+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13))) +
+  facet_wrap(~`Target Cell`)+
+  stat_compare_means(
+    method = "wilcox.test",
+    paired = TRUE,
+    comparisons = mycomparisons,
+    label = "p.format",
+    size = 5
+  )+ theme(axis.text = element_text(size = 18, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_text(face = "bold", size = 16), 
+        axis.title.x = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(size =18, face = "bold"))+
+  NoLegend()
+ggsave("7D.pdf", plot = p36,device = "pdf", path = path_fig, height = 4, width = 7)
+
+
+```
+##7E Boxplot CXCR5 Expression CD56dim
+```{r}
+#Extended Data Table 5, Tab Figure 7E and Extended 6I
+table_markers = read.xlsx('Source_Data_Figure_7.xlsx', sheet = "7E") %>% 
+  as.data.frame(table_markers) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+
+table_markers$Condition = table_markers$Condition %>% 
+  mapvalues(from = c("IFNa"), to = c("IFNα")) %>%
+  factor(levels = c("Unstim", "IFNα"))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[2])
+names(stim.cols) = c("Unstim", "IFNα")
+mycomparisons = list(c("Unstim", "IFNα"))
+
+
+
+p37 = ggplot(table_markers, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 3) +
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+  geom_boxplot(aes(fill = Condition),
+               alpha = 0.3,
+               outlier.shape = NA) +
+  theme_classic()+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13))) +
+  labs(y = "MFI",
+       title = "CXCR5\n(CD56dim CD16high)") +
+  scale_color_manual(values = stim.cols) +
+  scale_fill_manual(values = stim.cols) +
+  theme(
+    axis.text = element_text(size = 12, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_text(face = "bold", size = 10),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 14),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16, face = "bold"),
+    aspect.ratio = 1,
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  stat_compare_means(
+    method = "wilcox.test",
+    paired = T,
+    comparisons = mycomparisons,
+    p.adjust.methods = "bonferroni",
+    size = 5,
+    label = "p.format"
+  ) +
+  NoLegend()
+
+ggsave("7E.pdf", plot = p37, path = path_fig, height = 3, width = 3, device = "pdf")
+
+
+
+```
+
+
+##7F Scatterplot qPCR Killing Correlation
+```{r}
+table = read.xlsx('Source_Data_Figure_7.xlsx', sheet = "7F")
+
+p38 = ggplot(table, aes(x = dKilling, y = ddCt)) +
+  facet_wrap( ~ Gene, ncol = 4) +
+  theme_bw() +
+  geom_jitter(size = 3,
+              width = 0,
+              height = 0) +
+  geom_smooth(method = 'lm', aes(group = 1), color = "black") +
+  stat_cor(mapping = aes(group = 1),
+           method = "pearson",
+           label.y = 1,
+           size = 7) +
+  labs(x = "ΔKilling (Relative to Unstim)",
+       y = expression(bold(
+         ΔΔCt ~ "(Relative to" ~ bolditalic("18S") * ")"
+       ))) +
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(face = "bold", size = 18),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 18, face = "bold.italic"),
+    aspect.ratio = 1,
+    axis.line = element_line(color = "black")
+  )
+
+ggsave("7F.pdf", plot = p38, device = "pdf", path = path_fig, height = 4, width = 12)
+```
+
+#Figure 8
+##8A Boxplot NK ligand expression
+```{r}
+path_fig = 'Figure 8/'
+#Extended Data Table 5, Tab Figure 8A
+table = read.xlsx('Source_Data_Figure_8.xlsx', sheet = "8A") %>% 
+  as.data.frame(table) %>% 
+  pivot_longer(cols = -c(Donor, TargetCell, Protein))
+
+
+table$TargetCell = mapvalues(table$TargetCell, from = c("iTfh", "R", "A", "CXCR5-"), to = c("iTfh-Like\n(CXCR5+)", "Resting", "Activated", "not iTfh-Like\n(CXCR5-)"))
+                                
+table$TargetCell = factor(table$TargetCell, levels = c("Resting","Activated","not iTfh-Like\n(CXCR5-)", "iTfh-Like\n(CXCR5+)"))
+
+table <- table %>%
+  filter(Protein %in% c("B7-H6",
+                                                 "ULBP1",
+                                                 "ULBP2-5-6",
+                                                 "ULBP3",
+                                                 "MICA",
+                                                 "MICB",
+                                                  "CD48"))
+
+
+table$Protein = factor(table$Protein, levels = c("B7-H6",
+                                                 "ULBP1",
+                                                 "ULBP2-5-6",
+                                                 "ULBP3",
+                                                 "MICA",
+                                                 "MICB",
+                                                 "CD48"))
+
+
+#mycomparisons = list(c("iTfh", "Resting"))
+sort.cols = moma.colors("VanGogh", 4)
+sort.cols.2 = moma.colors("vonHeyl")
+sort.cols = c(sort.cols[2], sort.cols[3], sort.cols[4], sort.cols.2[2])          
+names(sort.cols) = c("iTfh-Like\n(CXCR5+)", "Activated", "Resting", "not iTfh-Like\n(CXCR5-)")
+
+mycomparisons = list(c("iTfh-Like\n(CXCR5+)", "not iTfh-Like\n(CXCR5-)"), c("iTfh-Like\n(CXCR5+)", "Activated"), c("iTfh-Like\n(CXCR5+)", "Resting"), c("Resting", "Activated"))
+
+
+p39 = ggplot(table, aes(x = TargetCell, y = value, color = TargetCell))  +
+  geom_point(size = 3) +
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+  geom_boxplot(aes(fill = TargetCell),
+               alpha = 0.3,
+               outlier.shape = NA) +
+  theme_classic() +
+  scale_color_manual(values = sort.cols) +
+  scale_fill_manual(values = sort.cols) +
+  facet_wrap(~ Protein, ncol = 4, scales = "free_y") +
+  labs(y = "Ligand Expression (%)",
+       x = "CD4 T Cell Type")+
+  scale_y_continuous(expand = expansion(mult = c(0.1, 0.2)))+
+  stat_compare_means(
+    method = "wilcox.test",
+    paired = T,
+    comparisons = mycomparisons,
+    p.adjust.methods = "bonferroni",
+    label = "p.format",
+    size = 6,
+    vjust = .1
+  )+
+  theme(
+    axis.text = element_text(size = 20, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_text(face = "bold", size = 24),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 28, face = "bold"), 
+    aspect.ratio = 1
+  ) + NoLegend()
+ggsave("8A.pdf",
+       plot = p39,
+    device = "pdf",
+    path = path_fig,
+    height = 10,
+    width = 18
+  )
+
+#Get the Axis scale right for CD48
+CD48 = subset(table, subset = Protein == "CD48")
+
+p40 = ggplot(CD48, aes(x = TargetCell, y = value, color = TargetCell))  +
+  geom_point(size = 3) +
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+  geom_boxplot(aes(fill = TargetCell),
+               alpha = 0.3,
+               outlier.shape = NA) +
+  theme_classic() +
+  scale_color_manual(values = sort.cols) +
+  scale_fill_manual(values = sort.cols) +
+  labs(y = "Ligand Expression (%)",
+       x = "CD4+ Cell Type")+
+  scale_y_continuous(limits = c(0, 140))+
+  stat_compare_means(
+    method = "wilcox.test",
+    paired = T,
+    comparisons = mycomparisons,
+    p.adjust.methods = "bonferroni",
+    label = "p.format",
+    size = 5,
+    label.y = c(105, 115, 125, 135),
+    tip.length = 1.5
+  )+
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 28, face = "bold"), 
+    aspect.ratio = 1
+  ) + NoLegend()
+ggsave("8A_CD48.pdf",
+       plot = p40,
+    device = "pdf",
+    path = path_fig,
+    height = 5,
+    width = 4.5
+  )
+
+
+```
+
+##8B is a biorender figure
+##8C Boxplot Killing Assays with Blocking Antibodies
+```{r}
+
+block.cols = c("#60A3BF","#ED8249", "#efc86e", "#97c684", "#808fe1", "#5c66a8")
+names(block.cols) = c("Unstim", "IFNα", "NKp30", "NKG2D", "NKG2D NKp30", "Isotype")
+
+#Extended Data Table 5, Tab Figure 8C
+table = read.xlsx('Source_Data_Figure_8.xlsx', sheet = "8C") %>% 
+  as.data.frame()
+
+table$Condition = table$Condition %>% 
+  mapvalues(from = c("IFNa"), to = c("IFNα")) 
+table$Condition = factor(table$Condition, levels = c("Unstim", "IFNα", "NKp30", "NKG2D", "NKG2D NKp30", "Isotype"))
+
+mycomparisons = list(c("Unstim", "IFNα"), c("IFNα", "NKp30"), c("IFNα", "NKG2D"), c("IFNα", "NKG2D NKp30"),c("IFNα", "Isotype"))
+
+p41 = ggplot(table, aes(x = Condition, y = `Background Subtracted Killing`, color = Condition))  +
+  geom_point(size = 3) +
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+  geom_boxplot(aes(fill = Condition), alpha = 0.3, outlier.shape = NA) +
+  theme_classic() +
+  labs(y = "Background Subtracted\nKilling (%)") +
+  theme(
+    axis.text = element_text(size = 18, color = "black"), 
+    axis.text.x = element_blank(), 
+    axis.title = element_text(face = "bold", size = 18), 
+    axis.title.x = element_blank(),
+    strip.background = element_blank(),
+    axis.ticks.x = element_blank()
+  ) +
+  scale_color_manual(values = block.cols) +
+  scale_fill_manual(values = block.cols)+
+  stat_compare_means(
+    method = "wilcox",
+    paired = T,
+    comparisons = mycomparisons,
+    p.adjust.methods = "bonferroni",
+    size = 5,
+    label = "p.format"
+  ) +
+  NoLegend()
+
+ggsave("8C.pdf", plot = p41, device = "pdf", path = path_fig, height = 4, width = 7)
+
+
+#Make X-axis figure label
+mat <- matrix(c(
+  "–", "+", "+", "+", "+", "+",
+  "–", "–", "+", "–", "+", "–",
+  "–", "–", "–", "+", "+", "–",
+  "–", "–", "–", "–", "–", "+"
+), nrow = 4, byrow = TRUE)
+
+rownames(mat) <- c("IFNα", "Anti-NKp30", "Anti-NKG2D", "Isotype Control")
+
+tbl <- tableGrob(
+  mat,
+  theme = ttheme_minimal(
+    core = list(fg_params = list(fontface = "bold")),
+    colhead = list(fg_params = list(fontface = "bold")),
+    rowhead = list(fg_params = list(fontface = "bold", fontsize = 8))
+  )
+)
+tbl$heights <- unit(rep(.9, nrow(tbl)), "lines")   
+tbl$widths <- unit(rep(1.2, ncol(tbl)), "cm")
+tbl$widths[1] <- unit(3.5, "cm")  
+
+pdf(paste0(path_fig, "/8C_legend.pdf"), width = 5, height = 2)
+grid.draw(tbl)
+dev.off()
+```
+##8D is a biorender figure
+##8E Boxplot cell conc after B:iTfh-Like:NK co-culture
+```{r}
+#Extended Data Table 5, Tab Figure 8D
+table = read.xlsx('Source_Data_Figure_8.xlsx', sheet = "8E") %>% 
+  as.data.frame(table) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+
+table$Condition = table$Condition %>% 
+  mapvalues(from = c("IFNa"), to = c("IFNα")) %>%
+  factor(levels = c("Unstim", "IFNα"))
+
+
+table$name = mapvalues(table$name, from = c("B", "Class Switched B", "Plasmablast", "iTfh-Like"), to = c("B", "Class Switched B\n(IgM-)", "Plasmablast\n(CD27+CD38+)", "iTfh-Like")) %>% factor(levels = c("B", "Class Switched B\n(IgM-)", "Plasmablast\n(CD27+CD38+)", "iTfh-Like"))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[3])
+names(stim.cols) = c("Unstim", "IFNα")
+mycomparisons = list(c("Unstim", "IFNα"))
+
+p42 = ggplot(table, aes(x = Condition, y = value, color = Condition))  +
+    geom_point(size = 3) +
+    geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+    geom_boxplot(aes(fill = Condition),
+                 alpha = 0.3,
+                 outlier.shape = NA) +
+    theme_classic()+
+  scale_color_manual(values = stim.cols)+
+  scale_fill_manual(values = stim.cols) +
+    facet_wrap( ~name, ncol = 4, scales = "free_y")+
+  stat_compare_means(method = "wilcox",
+                     comparisons = mycomparisons,
+                     label = "p.format", size = 8, paired = T, p.adjust.methods = "bonferroni") +
+    labs(y = "Cells/μL") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)), limits = c(0, NA))+
+    theme(
+      axis.text = element_text(size = 18, color = "black"),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      axis.title = element_text(face = "bold", size = 14),
+        strip.background = element_blank(),
+        strip.text = element_text(size =16, face = "bold"),
+      axis.title.x = element_blank(),
+      legend.text = element_text(size =16)
+    ) + NoLegend()
+ggsave("8E.pdf",
+       plot = p42,
+    device = "pdf",
+    path = path_fig,
+    height = 4,
+    width = 12
+  )
+```
+
+##8F Boxplot of ELISA Titers
+```{r}
+#Extended Data Table 5, Tab Figure 8E
+table = read.xlsx('Source_Data_Figure_8.xlsx', sheet = "8F") %>% 
+  as.data.frame(table) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+
+table$Condition = table$Condition %>% 
+  mapvalues(from = c("IFNa"), to = c("IFNα")) %>%
+  factor(levels = c("Unstim", "IFNα"))
+table$name = factor(table$name, levels = c("IgM", "IgG"))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[3])
+names(stim.cols) = c("Unstim", "IFNα")
+mycomparisons = list(c("Unstim", "IFNα"))
+
+#jitter for correct lines connecting donors
+table$jittered_value <- jitter(table$value, amount = 1)
+p43 = ggplot(table, aes(x = Condition, y = jittered_value, color = Condition)) +
+  geom_point(size = 3) +
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+  geom_boxplot(aes(y = value, fill = Condition),
+               alpha = 0.3,
+               outlier.shape = NA) +
+  theme_classic() +
+  scale_color_manual(values = stim.cols) +
+  scale_fill_manual(values = stim.cols) +
+  facet_wrap( ~ name, ncol = 4, scales = "free_y") +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = mycomparisons,
+    label = "p.format",
+    size = 8,
+    paired = TRUE,
+    p.adjust.methods = "bonferroni"
+  ) +
+  labs(y = "ng/μL") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)), limits = c(0, NA)) +
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_text(face = "bold", size = 14),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16, face = "bold"),
+    axis.title.x = element_blank()
+  ) +
+  NoLegend()
+ggsave("8F.pdf",
+       plot = p43,
+    device = "pdf",
+    path = path_fig,
+    height = 4,
+    width = 6
+  )
+
+
+```
+
+
+
+#Extended Data Figure 1
+##E1A Histogram of days post positive test
+```{r}
+path_fig =  'Extended 1/'
+
+meta = scPBMCcovid@meta.data %>%
+  select(Donor, days_post_pos_test) %>%
+  unique()
+
+p44 = ggplot(meta, aes(x = days_post_pos_test))+
+  geom_histogram(fill = "#69b3a2")+
+  theme_bw()+
+  labs(x = "Days Post Positive Test",
+       y = "Count")+
+  theme(axis.title = element_text(face = "bold", size = 24),
+        axis.text = element_text(colour = "black", size = 18),
+        aspect.ratio = 1)
+ggsave("E1A.pdf", plot = p50, device = "pdf", path = path_fig, height = 5, width = 5)
+
+```
+##Custom Function for Cell Type Proportion written by Dr. Aaron Wilk 2020
+```{r}
+propPlot <- function(seu, by = "cell.type", meta.include = NULL, group_by = "Breadth", shape_by = "acuity", 
+                     each.pt = "Donor", custom_fill_colors = severity.cols, color_by = "Severity.max.final", 
+                     comparisons = my_comparisons.current, 
+                     ncol = 4, label = "p.signif", select.idents = NULL, 
+                     label.x = NA, pt.size = NA) 
+{
+  if (is.null(group_by)){
+    group_by <- "null.group" 
+  } 
+  shapes <- NULL
+  if (!is.null(shape_by)) {
+    #uodate this in the finction to include input shapes
+    shapes <- c(16, 17, 15, 3, 7, 8)
+    if ((length(unique((seu[,shape_by]))[[1]])) > 6) {
+      if (n > 18) {
+        message(paste("At most 17 shapes are currently supported", 
+                      "but", n, "are required. Setting 'shape_by' to NULL."))
+        shape_by <- NULL
+      }
+      else {
+        new <- setdiff(c(seq_len(16) - 1, 18), shapes)
+        shapes <- c(shapes, new[seq_len(n - 6)])
+      }
+    }
+  }
+  if(is.null(color_by)){
+    color_by = group_by
+  }
+  if (by=="cell.type") {
+    fq <- prop.table(table(seu$cell.type, seu[,each.pt]), 2) *100
+    df <- reshape2::melt(fq, value.name = "freq", varnames = c("cell.type", 
+                                                               each.pt))  
+  }
+  meta.include <- unique(c(each.pt,group_by,shape_by,color_by))
+  ei = unique(seu[,meta.include])
+  df <- merge(df, ei, by = each.pt)
+  df <- cbind(df, null.group = paste("1"))
+  df[,each.pt] <- as.factor(df[,each.pt])
+  if(!is.null(select.idents)) {
+    df <- df[df$cell.type %in% select.idents,]
+  }
+  
+  ggplot(df, aes_string(y = "freq", x = group_by)) + labs(x = "Breadth Group", y = "% of PBMC") + 
+    theme_bw() + theme(panel.grid.minor = element_blank(), 
+                       panel.grid.major = element_blank(), 
+                       strip.background = element_rect(fill = NA, color = NA), 
+                       strip.text = element_text(face = "bold"),
+                       axis.ticks.x = element_blank(), 
+                       axis.text = element_text(color = "black")) + 
+    facet_wrap("cell.type", scales = "free_y", ncol = ncol) + 
+    guides(fill = FALSE) + geom_boxplot(aes_string(x = group_by), alpha = 0.25, outlier.color = NA) +
+    geom_point(size = 4, position = position_jitter(width = 0.25),
+               aes_string(x = group_by, y = "freq", color = color_by, shape = shape_by)) +
+    scale_shape_manual(values = shapes) + 
+    theme(panel.grid.major = element_line(color = "grey", size = 0.25), aspect.ratio = 1,
+          text = element_text(size = 20)) +
+    scale_color_manual(values = custom_fill_colors) +
+    scale_fill_manual(values = custom_fill_colors) + 
+    scale_y_continuous(expand = expand_scale(mult = c(0.05, 0.1))) + 
+    stat_compare_means(comparisons = comparisons, label = label) + 
+    labs(color = "Peak severity\nscore", shape = "Acuity")
+  
+} 
+```
+##E1B Boxplots Cell Proportion cyTOF
+```{r}
+
+meta.use <- cyPBMC@meta.data
+meta.use$cell.type <- meta.use$annotated_clusters
+meta.use$cell.type <- as.character(meta.use$cell.type)
+meta.use$cell.type <- gsub("Other Myeloid Cells", "Other Myeloid", meta.use$cell.type)
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+
+p45 = propPlot(
+  meta.use,
+  group_by = "Breadth",
+  ncol = 4,
+  by = "cell.type",
+  each.pt = "patient_id",
+  label = "p.format"
+) +
+  labs(y = "Proportion of PBMCs (%)") +
+  NoLegend() +
+  theme(axis.text.x = element_text(angle = 0, size = 11),
+        axis.title = element_text(face = "bold"))
+ggsave("E1B.pdf", plot = p45, device = "pdf", path = path_fig, height = 5, width = 10)
+
+
+```
+##E2B Boxplot Cell Proportions scRNAseq
+```{r}
+scPBMC$Breadth = factor(scPBMC$Breadth, levels = c("Healthy", "Narrow", "Broad"))
+meta.use <- scPBMC@meta.data%>%
+  select(Donor, Breadth, Severity.max.final, manual.coarse.idents, acuity)
+meta.use$cell.type <- meta.use$manual.coarse.idents
+meta.use$cell.type <- as.character(meta.use$cell.type)
+
+p46 = propPlot(meta.use, ncol = 4, group_by = "Breadth", label = "p.format") +
+  theme(
+    legend.position = "None",
+    axis.text.x = element_text(angle = 0, size = 11),
+    axis.title = element_text(face = "bold")
+  ) +
+  labs(y = "Proportion of PBMCs (%)")
+ggsave("E1C.pdf", device = "pdf",plot = p46, path = path_fig, height = 7.5, width = 10)
+```
+
+
+#Extended Data Figure 2
+##E2A Boxplots of non-significant markers from Figure 4A
+```{r}
+path_fig =  'Extended 2'
+#HLA_DR, KLRD1, and NCAM1 in scRNA
+expression_matrix <- GetAssayData(scNK, slot = "data")
+genes <- c("HLA-DRA", "HLA-DRB1", "HLA-DRB2", "HLA-DRB3", "HLA-DRB4", "HLA-DRB5")
+genes <- genes[genes %in% rownames(expression_matrix)]
+summed_expression <- colSums(expression_matrix[genes, ])
+scNK <- AddMetaData(scNK, metadata = summed_expression, col.name = "HLADR_Sum")
+HLA <- FetchData(scNK, vars = c("HLADR_Sum"))
+df <- aggregate(HLA, by = list(scNK@meta.data[,"Donor"]), FUN = "mean")
+colnames(df) <- c("Donor", "HLA-DR")
+ 
+nk_sc <- AverageExpression(scNK, assays = 'RNA', group.by = "Donor", slot = "data")
+nk_sc<- as.data.frame(nk_sc$RNA) %>% 
+  t() %>% 
+  subset(select = c(KLRD1, NCAM1)) %>% 
+  as.data.frame()
+nk_sc$Donor = rownames(nk_sc)
+nk_sc <- merge(nk_sc, df, by = "Donor", all.x = T)
+nk_sc <- nk_sc %>%
+  as.data.frame() %>%
+  pivot_longer(
+    cols = !Donor,
+    names_to = "protein",
+    values_to = "expression"
+  ) 
+
+meta <- scNK@meta.data
+meta <- meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, Donor) %>% 
+  unique()
+rownames(meta) <- meta$Donor
+nk_sc<- merge(nk_sc, meta, by = "Donor", all.x = T)
+nk_sc$protein <- factor(nk_sc$protein, levels = c("KLRD1", "KLRC1", "NCAM1", "MKI67", "HLA-DR", "IL7R"))
+nk_sc$Breadth <- factor(nk_sc$Breadth, levels =c("Healthy", "Narrow", "Broad"))
+
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+p47 = ggboxplot(
+  nk_sc,
+  x = "Breadth",
+  y = "expression",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap( ~ protein, scales = "free_y", ncol =3) +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    vjust = .2,
+    size = 6
+  ) +
+  theme_bw() +
+  labs(y = "Average Expression", x = "Breadth Group") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold.italic", size = 24),
+    axis.text = element_text(color = "black", size = 20),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 26
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    aspect.ratio = 1
+  ) 
+ggsave("E2A.pdf", plot = p47,  path = path_fig, height = 4.5, width = 15)
+```
+##E2B Boxplots of HLA-E expression in all cell types
+```{r}
+cytof_hlaE = AverageExpression(cyPBMC, assays = 'protein', group.by = c("patient_id", "annotated_clusters"), slot = "data")
+cytof_hlaE = as.data.frame(cytof_hlaE$protein) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  subset(select = c(`HLA-E`))
+cytof_hlaE$cell_type = sub(".*_", "", rownames(cytof_hlaE))
+new_row_names = sub("_(.*)", "", rownames(cytof_hlaE))
+cytof_hlaE$patient_id <- new_row_names
+rownames(cytof_hlaE) = NULL
+
+meta = cyPBMC@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, patient_id) %>% 
+  unique()
+
+cytof_hlaE = cytof_hlaE[cytof_hlaE$patient_id %in% meta$patient_id,]
+cytof_hlaE = merge(cytof_hlaE, meta, by = "patient_id", all.x = T)
+colnames(cytof_hlaE)[2] = "HLAE"
+cytof_hlaE$cell_type <- gsub("Other Myeloid Cells", "Other Myeloid", cytof_hlaE$cell_type)
+
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+p48 = ggboxplot(
+  cytof_hlaE,
+  x = "Breadth",
+  y = "HLAE",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap( ~ cell_type, nrow = 1, scales = "free_y") +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    vjust = 0.2,
+    size = 6
+  )+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13))) +
+  theme_bw() +
+  labs(y = "HLA-E Expression\n(Tansformed MSI)", x = "Breadth Group") +
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold", size = 20),
+    axis.text = element_text(color = "black", size = 20),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 26
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    axis.text.x = element_text(
+      angle = 25,
+      vjust = 1,
+      hjust = 1
+    )
+  )+NoLegend()
+ggsave("E2B.pdf", plot = p48,  path = path_fig, height = 5, width = 23)
+```
+
+##E2C Boxplots of HLA-Bw6 expression in all cell types
+```{r}
+#This data table was generated in Figure 4C
+p49 = ggboxplot(
+  cytof_hla_bw6,
+  x = "Breadth",
+  y = "HLABw6",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap( ~ cell_type, nrow = 1, scales = "free_y") +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    vjust = 0.2,
+    size =6
+  )+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13))) +
+  theme_bw() +
+  labs(y = "HLA-Bw6 Expression\n(Tansformed MSI)", x = "Breadth Group") +
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold", size = 18),
+    axis.text = element_text(color = "black", size = 20),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 26
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    axis.text.x = element_text(
+      angle = 25,
+      vjust = 1,
+      hjust = 1
+    )
+  )+NoLegend()
+
+ggsave("E2C.pdf", plot = p49,  path = path_fig, height = 5, width = 23 )
+```
+
+##E3D Boxplots of KIR expression in scRNAseq
+```{r}
+#All KIR genes detected in scRNAseq
+features = c("KIR2DL1", "KIR2DL2", "KIR2DL3", "KIR2DL4", "KIR3DL1", "KIR3DL2", "KIR3DL3")    
+nk_kir = AverageExpression(scNK, assays = 'RNA', group.by = "Donor", slot = "data")
+nk_kir = as.data.frame(nk_kir$RNA) %>% 
+  t() %>% 
+  subset(select = features) %>% 
+  as.data.frame()
+nk_kir$Donor = rownames(nk_kir)
+nk_kir = nk_kir %>%
+  as.data.frame() %>%
+  pivot_longer(
+    cols = !Donor,
+    names_to = "protein",
+    values_to = "expression"
+  ) 
+
+meta = scNK@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, Donor) %>% 
+  unique()
+rownames(meta) = meta$Donor
+nk_kir = merge(nk_kir, meta, by = "Donor", all.x = T)
+nk_kir$Breadth = factor(nk_kir$Breadth, levels =c("Healthy", "Narrow", "Broad"))
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+p50 = ggboxplot(
+  nk_kir,
+  x = "Breadth",
+  y = "expression",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap( ~ protein, scales = "free_y", ncol = 7) +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    vjust = .2,
+    size = 6
+  ) +
+  theme_bw() +
+  labs(y = "Average Expression", x = "Breadth Group") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold.italic", size = 24),
+    axis.text = element_text(color = "black", size = 20),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 26
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    axis.text.x = element_text(
+      angle = 25,
+      vjust = 1,
+      hjust = 1
+    )
+  )+NoLegend()
+
+ggsave("E3D.pdf", plot = p50, device = "pdf", path = path_fig, height = 5, width = 23)
+
+```
+##E3E Boxplots KIRS in cyTOF
+```{r}
+#All KIR genes in our  panel
+features = c("KIR2DL1", "KIR2DL5", "KIR2DS4", "KIR2DL3", "KIR2DS2", "KIR3DL1")    
+nk_kir = AverageExpression(cyNK, assays = 'protein', group.by = "patient_id", slot = "data")
+nk_kir = as.data.frame(nk_kir$protein) %>% 
+  t() %>% 
+  subset(select = features) %>% 
+  as.data.frame()
+nk_kir$patient_id = rownames(nk_kir)
+nk_kir = nk_kir %>%
+  as.data.frame() %>%
+  pivot_longer(
+    cols = !patient_id,
+    names_to = "protein",
+    values_to = "expression"
+  ) 
+
+meta = cyNK@meta.data
+meta = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Breadth, patient_id) %>% 
+  unique()
+rownames(meta) = meta$patient_id
+nk_kir = merge(nk_kir, meta, by = "patient_id", all.x = T)
+nk_kir$Breadth = factor(nk_kir$Breadth, levels = c("Healthy", "Narrow", "Broad"))
+
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+p51 = ggboxplot(
+  nk_kir,
+  x = "Breadth",
+  y = "expression",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap( ~ protein, scales = "free_y", ncol = 7) +
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    vjust = .2,
+    size = 6
+  ) +
+  theme_bw() +
+  labs(y = "Transformed MSI", x = "Breadth Group") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  theme(
+    strip.text = element_text(face = "bold", size = 24),
+    axis.text = element_text(color = "black", size = 20),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 26
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    strip.background = element_blank(),
+    axis.text.x = element_text(
+      angle = 25,
+      vjust = 1,
+      hjust = 1
+    )
+  )+NoLegend()
+
+ggsave("E3E.pdf", plot = p52, device = "pdf", path = path_fig, height = 5, width =23)
+```
+
+
+#Extended Data Figure 3
+##E3A Heatmap Downstream Multinichenet Target Genes Narrow
+```{r}
+path_fig = 'Extended 3/'
+#ligand_target_matrix available at "https://zenodo.org/record/7074291/files/ligand_target_matrix_nsga2r_final.rds"
+
+ligand_target_matrix = readRDS('/Users/izumidk2/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/COVID /SARS-CoV-2 Pseudovirus/Analysis/NewBreadthScores/MultiNicheNetR/ligand_target_matrix_nsga2r_final.rds')
+colnames(ligand_target_matrix) = colnames(ligand_target_matrix) %>% make.names()
+rownames(ligand_target_matrix) = rownames(ligand_target_matrix) %>% make.names()
+lr_network = readRDS(url("https://zenodo.org/record/7074291/files/lr_network_human_21122021.rds"))
+lr_network = lr_network %>% dplyr::rename(ligand = from, receptor = to) %>% distinct(ligand, receptor) %>% mutate(ligand = make.names(ligand), receptor = make.names(receptor))
+
+group_oi = "Narrow"
+senders_oi = unique(prioritized_tbl_oi$sender)
+receiver_oi = c("NK")
+contrast_tbl = tibble(
+  contrast = c("Narrow-Broad","Broad-Narrow"),
+  group = c("Narrow","Broad"))
+
+prioritized_tbl_oi_narrow = get_top_n_lr_pairs(
+  AlltoNK$prioritization_tables, 
+  top_n = 50, 
+  groups_oi = group_oi)
+
+p53 = make_ligand_activity_target_plot(
+  group_oi, 
+  receiver_oi, 
+  prioritized_tbl_oi_narrow,
+  AlltoNK$prioritization_tables, 
+  AlltoNK$ligand_activities_targets_DEgenes, contrast_tbl, 
+  AlltoNK$grouping_tbl, 
+  AlltoNK$celltype_info, 
+  ligand_target_matrix, 
+  plot_legend = FALSE)
+
+pdf(paste0(path_fig, "E3A.pdf"), width = 20, heigh = 15)
+p53
+dev.off()
+
+```
+
+##E3B Downstream Multinichenet Target Genes Broad
+```{r}
+group_oi = "Broad"
+prioritized_tbl_oi_broad = get_top_n_lr_pairs(
+  AlltoNK$prioritization_tables, 
+  top_n = 50, 
+  groups_oi = group_oi)
+
+p54 = make_ligand_activity_target_plot(
+  group_oi, 
+  receiver_oi, 
+  prioritized_tbl_oi_broad,
+  AlltoNK$prioritization_tables, 
+  AlltoNK$ligand_activities_targets_DEgenes, contrast_tbl, 
+  AlltoNK$grouping_tbl, 
+  AlltoNK$celltype_info, 
+  ligand_target_matrix, 
+  plot_legend = FALSE)
+
+pdf(paste0(path_fig, "E3B.pdf"), width = 20, heigh = 15)
+p54
+dev.off()
+
+```
+
+##E3C UMAP CD4 T Cell Seurat Clusters
+```{r}
+cd4.cell <- colnames(scPBMC)[grep("^CD4",scPBMC$celltype.l2)]
+scCD4 <- subset(scPBMC, cells = cd4.cell)
+scCD4 = SCTransform(scCD4, vars.to.regress = c("percent.mt", "percent.rps", "percent.rpl", "percent.rrna", "nCount_RNA", "nFeature_RNA", "percent.hb"), verbose = FALSE)
+scCD4 <- RunPCA(scCD4, verbose = F)
+scCD4 <- RunUMAP(scCD4, verbose = F, dims = 1:50, n.neighbors = 50, min.dist = .2)
+scCD4 <- FindNeighbors(scCD4)
+scCD4 = FindClusters(scCD4, resolution = .2)
+
+cols_CD4 = met.brewer("Tam", n = 8)
+names(cols_CD4) = c(6, 4, 0, 2, 7, 3, 5, 1)
+
+p55 = DimPlot(scCD4, group.by = "seurat_clusters", cols = cols_CD4, reduction = "umap") +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.title = element_blank(),        
+    legend.title = element_text(size = 12),
+    aspect.ratio = 1
+  ) +
+  labs(x = "UMAP 1", y = "UMAP 2", color = "Seurat Clusters")  
+ggsave("E3C.pdf", plot = p55, path = path_fig, height = 4, width = 4)
+
+```
+##E3D UMAPs of Tfh Genes
+```{r}
+tfh_features <- c("CXCR5", "BCL6", "ICOS", "PDCD1", "CD40LG")
+plots <- lapply(seq_along(tfh_features), function(i) {
+  gene <- tfh_features[i]
+  p <- FeaturePlot(scCD4, features = gene, reduction = "umap")+
+    ggtitle(bquote(italic(.(gene))))+
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          aspect.ratio = 1)+
+    labs(x = "UMAP 1",
+         y = "UMAP 2")
+  if (i != length(tfh_features)) {
+    p <- p + theme(legend.position = "none")
+  }
+  return(p)
+})
+p56 = wrap_plots(plots, ncol = 5)
+ggsave("E5B.pdf", plot = p56, path = path_fig, height = 2.5, width = 12)
+```
+
+#Extended Data Figure 4
+##E4A and B Public Tissue Datasets
+###Lindeboom et al. Make Seurat
+```{r}
+path_fig = 'Extended 4/'
+#H5ad Data downloaded from Human SARS-CoV-2 challenge resolves local and systemic response dynamics on COVID-19 Cell Atlas
+ad = import("anndata", convert = T)  
+adata = ad$read_h5ad('/Users/izumidk/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/COVID /Public Data Paper/Nasal_Challenge/challenge_nasal_cellxgene_230223.h5ad')
+
+counts = Matrix::Matrix(adata$X, sparse = TRUE)
+counts = t(counts)
+#writeMM(counts, '/Users/izumidk/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/COVID /Public Data Paper/Nasal_Challenge/matrix.mtx')
+
+meta = adata$obs 
+#write.csv(meta, '/Users/izumidk/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/COVID /Public Data Paper/Nasal_Challenge/meta.csv')
+
+nasal_ch = CreateSeuratObject(counts = counts, meta.data = meta, min.features = 500, min.cells = 30)
+
+#saveRDS(nasal_ch, '/Users/izumidk/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/COVID /Public Data Paper/Nasal_Challenge/nasal_ch.rds')
+
+#nasal_ch = readRDS('/Users/izumidk/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/COVID /Public Data Paper/Nasal_Challenge/nasal_ch.rds')
+
+nasal_ch_7 = subset(nasal_ch, subset = time_point == "D7")
+nasal_ch_7[["percent.mt"]] <- PercentageFeatureSet(nasal_ch_7, pattern = "^MT-")
+nasal_ch_7 = SCTransform(nasal_ch_7, vars.to.regress = c("percent.mt","nCount_RNA", "nFeature_RNA"), verbose = FALSE)
+nasal_ch_7 <- RunPCA(nasal_ch_7, verbose = F)
+nasal_ch_7 <- RunUMAP(nasal_ch_7, verbose = F, dims = 1:50)
+nasal_ch_7 <- FindNeighbors(nasal_ch_7)
+nasal_ch_7 <- FindClusters(nasal_ch_7)
+
+#saveRDS(nasal_ch_7, '/Users/izumidk/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/COVID /Public Data Paper/Nasal_Challenge/nasal_ch_7.rds')
+
+nasal_ch_7 = readRDS('/Users/izumidk2/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/COVID /Public Data Paper/Nasal_Challenge/nasal_ch_7.rds')
+
+nasal_ch_7$cell_type = mapvalues(
+  nasal_ch_7$cell_type,
+  from = c(
+    "Club",
+    "Ciliated",
+    "Ionocyte",
+    "Goblet",
+    "T CD8",
+    "Deutorosomal",
+    "Secretory",
+    "T MAI",
+    "Ductal",
+    "T CD4",
+    "B",
+    "Macrophage",
+    "Basal",
+    "pDC",
+    "Monocyte",
+    "NK",
+    "T G/D",
+    "cDC Activated",
+    "Melanocyte",
+    "AS-DC",
+    "cDC2",
+    "T Reg",
+    "cDC1",
+    "Squamous",
+    "Hillock",
+    "Langerhans",
+    "Mast"
+  ),
+  to = c( "Club",
+    "Ciliated",
+    "Ionocyte",
+    "Goblet",
+    "CD8 T",
+    "Deutorosomal",
+    "Secretory",
+    "MAIT",
+    "Ductal",
+    "CD4 T",
+    "B",
+    "Macrophage",
+    "Basal",
+    "Dendritic",
+    "Monocyte",
+    "NK",
+    "gdT",
+    "Dendritic",
+    "Melanocyte",
+    "Dendritic",
+    "Dendritic",
+    "Treg",
+    "Dendritic",
+    "Squamous",
+    "Hillock",
+    "Langerhans",
+    "Mast")
+) %>% as.factor()
+```
+###Walsh et al. Make Seurat
+```{r}
+#Seurat object downloaded from https://singlecell.broadinstitute.org/single_cell/study/SCP2593/impact-of-variants-and-vaccination-on-nasal-immunity-across-three-waves-of-sars-cov-2#study-download
+nasal = readRDS('/Users/izumidk2/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/COVID /Public Data Paper/Nasal/Variant_Vax_obj.Rds')
+#nasal = UpdateSeuratObject(nasal)
+nasal_ancestral = subset(nasal, subset = Variant_Group == "Ancestral")
+nasal_ancestral = SCTransform(nasal_ancestral, vars.to.regress = c("percent.mt","nCount_RNA", "nFeature_RNA"), verbose = FALSE)
+nasal_ancestral <- RunPCA(nasal_ancestral, verbose = F)
+nasal_ancestral <- RunUMAP(nasal_ancestral, verbose = F, dims = 1:50)
+nasal_ancestral <- FindNeighbors(nasal_ancestral)
+nasal_ancestral <- FindClusters(nasal_ancestral)
+
+nasal_ancestral$Coarse_Annotation = mapvalues(
+  nasal_ancestral$Coarse_Annotation,
+  from = c(
+    "Ciliated",
+    "Deuterosomal",
+    "Secretory",
+    "Squamous",
+    "Basal",
+    "SARSCoV2-high",
+    "Ionocytes",
+    "Goblet",
+    "MT-high",
+    "Macrophage",
+    "Dendritic",
+    "T_Cell",
+    "B_Cell"
+  ),
+  to = c(
+    "Ciliated",
+    "Deuterosomal",
+    "Secretory",
+    "Squamous",
+    "Basal",
+    "SARSCoV2-high",
+    "Ionocyte",
+    "Goblet",
+    "MT-high",
+    "Macrophage",
+    "Dendritic",
+    "T Cell",
+    "B Cell"
+  )
+) %>% as.factor()
+
+```
+##E4A Violin Plots IFNG 
+```{r}
+#cell.names = c(unique(nasal_ch_7$cell_type), unique(nasal_ancestral$Coarse_Annotation))
+#cell.names = unique(cell.names)
+cell.cols = moma.colors("Warhol", n = 27)
+cell.cols = c(cell.cols[1], cell.cols[1:27])
+names(cell.cols) = c(
+  "CD8 T",
+  "T Cell",
+  "Club",
+  "Ciliated",
+  "Ionocyte",
+  "Goblet",
+  "MAIT",
+  "Ductal",
+  "CD4 T",
+  "B",
+  "Macrophage",
+  "Basal",
+  "Dendritic",
+  "Monocyte",
+  "NK",
+  "gdT",
+  "Melanocyte",
+  "Treg",
+  "Squamous",
+  "Hillock",
+  "Langerhans",
+  "Mast",
+  "Deuterosomal",
+  "SARSCoV2-high",
+  "MT-high",
+  "B Cell"
+)
+
+
+
+
+p57 <- VlnPlot(
+  nasal_ch_7,
+  features = "IFNG",
+  cols = cell.cols,
+  group.by = "cell_type",
+  pt.size = 0  # remove default black points
+)
+
+# Add custom-colored points to match fill colors
+plot_data <- p57$data  
+p57 <- p57 +
+  geom_jitter(
+    data = plot_data,
+    aes(x = ident, y = IFNG, color = ident),
+    width = 0.2,
+    size = 0.5
+  ) +
+  scale_color_manual(values = cell.cols) +
+  labs(
+    x = "Cell Type",
+    title = "Lindeboom et al. 2024.",
+    subtitle = "IFNG"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.title = element_text(face = "bold"),
+    plot.subtitle = element_text(face = "italic", hjust = 0.5)
+  ) +
+  NoLegend()
+
+ggsave("E4C_1.png", plot = p1, device = "png", path = path_fig, height = 4, width = 6)
+
+p58 <- VlnPlot(
+  nasal_ancestral,
+  features = "IFNG",
+  cols = cell.cols,
+  group.by = "Coarse_Annotation",
+  pt.size = 0
+)
+
+plot_data2 <- p58$data
+
+p58 <- p58 +
+  geom_jitter(
+    data = plot_data2,
+    aes(x = ident, y = IFNG, color = ident),
+    width = 0.2,
+    size = 0.5
+  ) +
+  scale_color_manual(values = cell.cols) +
+  labs(
+    x = "Cell Type",
+    title = "Walsh et al. 2025.",
+    subtitle = "IFNG"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.title = element_text(face = "bold"),
+    plot.subtitle = element_text(face = "italic", hjust = 0.5)
+  ) +
+  NoLegend()
+
+ggsave("E4C_2.png", plot = p58, device = "png", path = path_fig, height = 4, width = 4)
+
+
+
+
+```
+
+
+##E4B UMAPs of CD8A and IFNG
+```{r}
+p59 = FeaturePlot(nasal_ch_7, features = "CD8A")+
+  labs(x = "UMAP 1",
+       y = "UMAP 2",
+       title = "CD8A")+
+  theme(aspect.ratio = 1,
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(face = "italic")
+        )
+ggsave("E4D_1.png", plot = p59,  path = path_fig, height = 4, width = 4)
+
+p60 = FeaturePlot(nasal_ch_7, features = "IFNG", cols = c("lightgrey", cell.cols[1]))+
+  labs(x = "UMAP 1",
+       y = "UMAP 2",
+       title = "IFNG")+
+  theme(aspect.ratio = 1,
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(face = "italic")
+        )
+ggsave("E4D_2.png", plot = p60,  path = path_fig, height = 4, width = 4)
+
+p61 = FeaturePlot(nasal_ancestral, features = "CD8A")+
+  labs(x = "UMAP 1",
+       y = "UMAP 2",
+       title = "CD8A")+
+  theme(aspect.ratio = 1,
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(face = "italic")
+        )
+ggsave("E4D_3.png", plot = p61,  path = path_fig, height = 4, width = 4)
+
+p62 = FeaturePlot(nasal_ancestral, features = "IFNG", cols = c("lightgrey", cell.cols[1]))+
+  labs(x = "UMAP 1",
+       y = "UMAP 2",
+       title = "IFNG")+
+  theme(aspect.ratio = 1,
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(face = "italic")
+        )
+ggsave("E4D_4.png", plot = p62,  path = path_fig, height = 4, width = 4)
+
+title1 = ggplot() +
+  theme_void() +
+  annotate("text", x = 0.5, y = 0.5, label = "Lindeboom et al. 2024.", fontface = "bold", size = 5, hjust = 0.5)
+
+title2 = ggplot() +
+  theme_void() +
+  annotate("text", x = 0.5, y = 0.5, label = "Walsh et al. 2025.", fontface = "bold", size = 5, hjust = 0.5)
+
+final_plot = (title1 | title2) / (p59 | p60 | p61 | p62) +
+  plot_layout(heights = c(0.2, 1))  
+ggsave("E4D_combined.pdf", plot = final_plot, path = path_fig, width = 16, height = 4)
+
+```
+
+##E4C is a biorender figure
+##E4D Boxplot of Tfh Markers
+```{r}
+table = read.xlsx('Source_Data_Extended_Data_Figure_4.xlsx', sheet = "Extended 4D") %>% 
+  as.data.frame() %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+table <- table %>%
+  filter(name %in% c("CXCR5 MFI", "ICOS MFI", "PD-1 MFI", "CD40L MFI", "BCL6 MFI"))
+
+table$Condition = factor(table$Condition, levels = 
+                       c("Resting", "Activated", "iTfh-like"))
+table$name = factor(table$name, c("CXCR5 MFI", "PD-1 MFI", "ICOS MFI", "CD40L MFI", "BCL6 MFI"))
+
+sort.cols = moma.colors("VanGogh", 4)
+sort.cols = c(sort.cols[2], sort.cols[3], sort.cols[4])          
+names(sort.cols) = c("iTfh-like", "Activated", "Resting")
+mycomparisons = list(c("iTfh-like", "Activated"), c("iTfh-like", "Resting"))
+
+
+p63 = ggplot(table, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 3)+
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5)+
+  geom_boxplot(aes(fill = Condition), alpha = 0.3, outlier.shape = NA)+
+  theme_classic()+
+  labs(y = "MFI", x = "CD4 T Cell Type")+
+  scale_color_manual(values = sort.cols)+
+  scale_fill_manual(values = sort.cols) +
+  facet_wrap(~name, scales = "free_y", ncol = 3)+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.2)))+
+  theme(axis.text = element_text(size =12, color = "black"), 
+        axis.text.x = element_text(angle = 45, hjust =1), 
+        axis.title = element_text(face = "bold", size = 12),
+        strip.background = element_blank(),
+        strip.text = element_text(size =14, face = "bold"),
+        aspect.ratio = 1)+
+  NoLegend()+
+  stat_compare_means(method = "wilcox.test", paired = TRUE, comparisons = mycomparisons, p.adjust.methods = "bonferroni", size = 4, label = "p.format") 
+ggsave("E4D.pdf", plot = p63, device = "pdf", path = path_fig, height = 6, width = 7.5)
+```
+
+
+
+#Extended Data Figure 5
+##E5A Boxplots co-cultures % positive
+```{r}
+path_fig = 'Extended 5/'
+table_markers = read.xlsx('Source_Data_Extended_Data_Figure_5.xlsx', sheet = "E5A") %>% 
+  as.data.frame(table_markers) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+table_markers$Condition = table_markers$Condition %>% 
+  mapvalues(from = c("IFNa", "IFNa NK only"), to = c("IFNα", "IFNα NK only")) %>%
+  factor(levels = c("Unstim NK only", "IFNα NK only", "Unstim", "IFNα"))
+
+
+mycomparisons = list(c("Unstim", "IFNα"), c("IFNα", "IFNα NK only"))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[2], stim.cols[7], stim.cols[5])
+names(stim.cols) = c("Unstim", "IFNα", "Unstim NK only", "IFNα NK only")
+
+
+p64 = ggplot(table_markers, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 3)+
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5)+
+  geom_boxplot(aes(fill = Condition), alpha = 0.3, outlier.shape = NA)+
+  theme_classic()+
+  labs(y = "% of NK Cells")+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  scale_color_manual(values = stim.cols)+
+  scale_fill_manual(values = stim.cols)+
+  facet_wrap(~name, scales = "free_y",ncol = 3)+
+  theme(
+    axis.text = element_text(size = 12, color = "black"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 16),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16, face = "bold"),
+    aspect.ratio = 1)+
+    stat_compare_means(method = "wilcox.test",paired =T, comparisons = mycomparisons, p.adjust.methods = "bonferroni", size=3, label = "p.format")+
+  NoLegend()
+ggsave("E5A.pdf", plot = p64, device = "pdf", path = path_fig, height = 3.25, width = 8.5)
+
+
+```
+##E5B flow plot
+##E5C flow plot
+##E5D Boxplots co-cultures MFI
+```{r}
+table_markers = read_xlsx('Source_Data_Extended_Data_Figure_5.xlsx', sheet = "E5B") %>% 
+  as.data.frame(table_markers) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+table_markers$Condition = table_markers$Condition %>% 
+  mapvalues(from = c("IFNa", "IFNa NK only"), to = c("IFNα", "IFNα NK only")) %>%
+  factor(levels = c("Unstim NK only", "IFNα NK only", "Unstim", "IFNα"))
+
+
+
+table_markers$name = factor(
+  table_markers$name,
+  levels =
+    c(
+      "CD107a MFI",
+      "Perforin MFI",
+      "GZMB MFI",
+      "NKG2D MFI",
+      "IFNg MFI",
+      "CD38 MFI",
+      "CD69 MFI",
+      "TRAIL MFI"
+    ))
+
+p65 = ggplot(table_markers, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 2.5)+
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5)+
+  geom_boxplot(aes(fill = Condition), alpha = 0.3, outlier.shape = NA)+
+  theme_classic()+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  labs(y = "MFI")+
+  scale_color_manual(values = stim.cols)+
+  scale_fill_manual(values = stim.cols)+
+  facet_wrap(~name, scales = "free_y",ncol = 8)+
+  theme(
+    axis.text = element_text(size = 10, color = "black"), 
+    axis.text.x = element_blank(), 
+    axis.title = element_text(face = "bold", size = 10), 
+    axis.title.x = element_blank(), 
+    axis.title.y =element_text(face = "bold", size = 12),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),  
+    strip.text = element_text(size = 12, face = "bold"),
+    aspect.ratio = 1)+
+    stat_compare_means(method = "wilcox.test",paired =T, comparisons = mycomparisons, p.adjust.methods = "bonferroni", size=3, label = "p.format")+
+  NoLegend()
+ggsave("E5D.pdf", plot = p65, device = "pdf", path = path_fig, height = 3.5, width = 18)
+
+```
+
+##E5E Boxplots co-culture MFI in CD56bright
+```{r}
+table_markers = read_xlsx('Source_Data_Extended_Data_Figure_5.xlsx', sheet = "E5E") %>% 
+  as.data.frame(table_markers) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+table_markers$Condition = table_markers$Condition %>% 
+  mapvalues(from = c("IFNa", "IFNa NK only"), to = c("IFNα", "IFNα NK only")) %>%
+  factor(levels = c("Unstim NK only", "IFNα NK only", "Unstim", "IFNα"))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[2], stim.cols[7], stim.cols[5])
+names(stim.cols) = c("Unstim", "IFNα", "Unstim NK only", "IFNα NK only")
+
+mycomparisons = list(c("Unstim", "IFNα"), c("IFNα", "IFNα NK only"))
+
+#pull MFI for figure
+keep = c(
+      "CD107a MFI",
+      "Perforin MFI",
+      "GZMB MFI",
+      "NKG2D MFI",
+      "IFNg MFI",
+      "CD38 MFI",
+      "CD69 MFI",
+      "TRAIL MFI")
+
+table_keep <- table_markers %>%
+  filter(name %in% keep)
+table_keep$name = factor(
+  table_keep$name,
+  levels =
+    c(
+      "CD107a MFI",
+      "Perforin MFI",
+      "GZMB MFI",
+      "NKG2D MFI",
+      "IFNg MFI",
+      "CD38 MFI",
+      "CD69 MFI",
+      "TRAIL MFI"
+    )
+)
+p66 = ggplot(table_keep, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 2.5)+
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5)+
+  geom_boxplot(aes(fill = Condition), alpha = 0.3, outlier.shape = NA)+
+  theme_classic()+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  labs(y = "MFI", title = "CD56 Bright")+
+  scale_color_manual(values = stim.cols)+
+  scale_fill_manual(values = stim.cols)+
+  facet_wrap(~name, scales = "free_y",ncol = 8)+
+  theme(
+    axis.text = element_text(size = 10, color = "black"), 
+    axis.text.x = element_blank(), 
+    axis.title = element_text(face = "bold", size = 10), 
+    axis.title.x = element_blank(), 
+    axis.title.y =element_text(face = "bold", size = 12),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),  
+    strip.text = element_text(size = 12, face = "bold"),
+    aspect.ratio = 1)+
+    stat_compare_means(method = "wilcox.test",paired =T, comparisons = mycomparisons, p.adjust.methods = "bonferroni", size=3, label = "pformat")+
+  NoLegend()
+ggsave("E5E.pdf", plot = p66, device = "pdf", path = path_fig, height = 3.5, width = 18)
+
+
+
+
+
+```
+
+##E5F Boxplots co-culture MFI in CD56dim CD16high
+```{r}
+#Extended Data Table 5, Tab Extended 6F
+table_markers = read_xlsx('Source_Data_Extended_Data_Figure_5.xlsx', sheet = "E5F") %>% 
+  as.data.frame(table_markers) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+table_markers$Condition = table_markers$Condition %>% 
+  mapvalues(from = c("IFNa", "IFNa NK only"), to = c("IFNα", "IFNα NK only")) %>%
+  factor(levels = c("Unstim NK only", "IFNα NK only", "Unstim", "IFNα"))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[2], stim.cols[7], stim.cols[5])
+names(stim.cols) = c("Unstim", "IFNα", "Unstim NK only", "IFNα NK only")
+
+mycomparisons = list(c("Unstim", "IFNα"), c("IFNα", "IFNα NK only"))
+
+#pull MFI for Figures
+keep = c(
+      "CD107a MFI",
+      "Perforin MFI",
+      "GZMB MFI",
+      "NKG2D MFI",
+      "IFNg MFI",
+      "CD38 MFI",
+      "CD69 MFI",
+      "TRAIL MFI")
+
+table_keep <- table_markers %>%
+  filter(name %in% keep)
+table_keep$name = factor(
+  table_keep$name,
+  levels =
+    c(
+      "CD107a MFI",
+      "Perforin MFI",
+      "GZMB MFI",
+      "NKG2D MFI",
+      "IFNg MFI",
+      "CD38 MFI",
+      "CD69 MFI",
+      "TRAIL MFI"
+    )
+)
+p67 = ggplot(table_keep, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 2.5)+
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5)+
+  geom_boxplot(aes(fill = Condition), alpha = 0.3, outlier.shape = NA)+
+  theme_classic()+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  labs(y = "MFI", title = "CD56dim CD16high")+
+  scale_color_manual(values = stim.cols)+
+  scale_fill_manual(values = stim.cols)+
+  facet_wrap(~name, scales = "free_y",ncol = 8)+
+  theme(
+    axis.text = element_text(size = 10, color = "black"), 
+    axis.text.x = element_blank(), 
+    axis.title = element_text(face = "bold", size = 10), 
+    axis.title.x = element_blank(), 
+    axis.title.y =element_text(face = "bold", size = 12),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),  
+    strip.text = element_text(size = 12, face = "bold"),
+    aspect.ratio = 1)+
+    stat_compare_means(method = "wilcox.test",paired =T, comparisons = mycomparisons, p.adjust.methods = "bonferroni", size=3, label = "p.format")+
+  NoLegend()
+ggsave("E5F.pdf", plot = p67, device = "pdf", path = path_fig, height = 3.5, width = 18)
+```
+##E5G Boxplots co-culture MFI in CD56dim CD16low
+```{r}
+#Extended Data Table 5, Tab Extended 6G
+table_markers = read_xlsx('Source_Data_Extended_Data_Figure_5.xlsx', sheet = "E5G") %>% 
+  as.data.frame(table_markers) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+table_markers$Condition = table_markers$Condition %>% 
+  mapvalues(from = c("IFNa", "IFNa NK only"), to = c("IFNα", "IFNα NK only")) %>%
+  factor(levels = c("Unstim NK only", "IFNα NK only", "Unstim", "IFNα"))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[2], stim.cols[7], stim.cols[5])
+names(stim.cols) = c("Unstim", "IFNα", "Unstim NK only", "IFNα NK only")
+
+mycomparisons = list(c("Unstim", "IFNα"), c("IFNα", "IFNα NK only"))
+
+#pull MFI for figures
+keep = c(
+      "CD107a MFI",
+      "Perforin MFI",
+      "GZMB MFI",
+      "NKG2D MFI",
+      "IFNg MFI",
+      "CD38 MFI",
+      "CD69 MFI",
+      "TRAIL MFI")
+
+table_keep <- table_markers %>%
+  filter(name %in% keep)
+table_keep$name = factor(
+  table_keep$name,
+  levels =
+    c(
+      "CD107a MFI",
+      "Perforin MFI",
+      "GZMB MFI",
+      "NKG2D MFI",
+      "IFNg MFI",
+      "CD38 MFI",
+      "CD69 MFI",
+      "TRAIL MFI"
+    )
+)
+p68 = ggplot(table_keep, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 2.5)+
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5)+
+  geom_boxplot(aes(fill = Condition), alpha = 0.3, outlier.shape = NA)+
+  theme_classic()+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  labs(y = "MFI", title = "CD56dimCD16low")+
+  scale_color_manual(values = stim.cols)+
+  scale_fill_manual(values = stim.cols)+
+  facet_wrap(~name, scales = "free_y",ncol = 8)+
+  theme(
+    axis.text = element_text(size = 10, color = "black"), 
+    axis.text.x = element_blank(), 
+    axis.title = element_text(face = "bold", size = 10), 
+    axis.title.x = element_blank(), 
+    axis.title.y =element_text(face = "bold", size = 12),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),  
+    strip.text = element_text(size = 12, face = "bold"),
+    aspect.ratio = 1)+
+    stat_compare_means(method = "wilcox.test",paired =T, comparisons = mycomparisons, p.adjust.methods = "bonferroni", size=3, label = "p.format")+
+  NoLegend()
+ggsave("E5G.pdf", plot = p68, device = "pdf", path = path_fig, height = 3.5, width = 18)
+
+
+
+
+
+```
+#Extended Data Figure 6
+##E6A Boxplots co-culture with activated CD4 %positive
+```{r}
+path_fig = 'Extended 6/'
+#Extended Data Table 5, Tab Extended Data Figure 7A and B 
+table_markers = read_xlsx('Source_Data_Extended_Data_Figure_6.xlsx', sheet = "E5A") %>% 
+  as.data.frame(table_markers) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+table_markers$Condition = table_markers$Condition %>% 
+  mapvalues(from = c("IFNa", "IFNa NK only"), to = c("IFNα", "IFNα NK only")) %>%
+  factor(levels = c("unstim NK only", "IFNα NK only", "unstim", "IFNα"))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[2], stim.cols[7], stim.cols[5])
+names(stim.cols) = c("unstim", "IFNα", "unstim NK only", "IFNα NK only")
+
+mycomparisons = list(c("unstim", "IFNα"), c("IFNα", "IFNα NK only"))
+
+#Percent positive for E7A
+keep = c(
+      "CD107a+",
+      "Perforin+",
+      "GZMB+",
+      "Activated (CD38+CD69+)",
+      "NKG2D+",
+      "IFNg+",
+      "CD38+",
+      "CD69+",
+      "TRAIL+")
+
+
+table_keep <- table_markers %>%
+  filter(name %in% keep)
+
+table_keep$name =  mapvalues(table_keep$name, from = c("Activated (CD38+CD69+)"), to = c("Activated \n (CD38+CD69+)"))
+table_keep$name = factor(
+  table_keep$name,
+  levels =
+    c(
+      "CD107a+",
+      "Perforin+",
+      "GZMB+",
+      "NKG2D+",
+      "IFNg+",
+      "CD38+",
+      "CD69+",
+      "TRAIL+",
+      "Activated \n (CD38+CD69+)"
+    )
+)
+
+p69 = ggplot(table_keep, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 2.5) +
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+  geom_boxplot(aes(fill = Condition),
+               alpha = 0.3,
+               outlier.shape = NA) +
+  theme_classic()+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.2))) +
+  labs(y = "% of NK Cells") +
+  scale_color_manual(values = stim.cols) +
+  scale_fill_manual(values = stim.cols) +
+  facet_wrap( ~ name, scales = "free_y", ncol = 9) +
+  theme(
+    axis.text = element_text(size = 10, color = "black"),
+    axis.text.x = element_blank(),
+    axis.title = element_text(face = "bold", size = 10),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 12),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14, face = "bold"),
+    aspect.ratio = 1
+  ) +
+  stat_compare_means(
+    method = "wilcox.test",
+    paired = T,
+    comparisons = mycomparisons,
+    p.adjust.methods = "bonferroni",
+    size = 3,
+    label = "p.format"
+  )+
+  NoLegend()
+
+ggsave("E6A.pdf", plot = p69, path = path_fig, height = 3.5, width = 18, device = "pdf")
+```
+##E6B Boxplots co-culture with activated CD4 MFI
+```{r}
+table_markers <- read_xlsx('Source_Data_Extended_Data_Figure_6.xlsx', sheet = "E6B")
+# Create blank panel for spacing
+ghost_facets <- paste0("ZZZ_blank")
+ghost_rows <- data.frame(
+  Condition = "unstim",
+  value = 100,
+  Donor = NA,
+  name = ghost_facets
+)
+
+# Bind to original
+table_markers_padded <- table_markers %>%
+  mutate(name = as.character(name)) %>%
+  bind_rows(ghost_rows)
+
+table_markers_padded$name = factor(
+  table_markers_padded$name,
+  levels =
+    c(
+      "CD107a MFI",
+      "Perforin MFI",
+      "GZMB MFI",
+      "NKG2D MFI",
+      "IFNg MFI",
+      "CD38 MFI",
+      "CD69 MFI",
+      "TRAIL MFI",
+      "ZZZ_blank"
+    )
+)
+table_markers_padded$Condition <- factor(
+  table_markers_padded$Condition,
+  levels = c("unstim NK only", "IFNα NK only", "unstim", "IFNα")
+)
+p70 = ggplot(table_markers_padded, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 2.5) +
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+  geom_boxplot(aes(fill = Condition),
+               alpha = 0.3,
+               outlier.shape = NA) +
+  theme_classic()+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.2))) +
+  labs(y = "MFI") +
+  scale_color_manual(values = stim.cols) +
+  scale_fill_manual(values = stim.cols) +
+  facet_wrap( ~ name, scales = "free_y", ncol = 9) +
+  theme(
+    axis.text = element_text(size = 10, color = "black"),
+    axis.text.x = element_blank(),
+    axis.title = element_text(face = "bold", size = 10),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 12),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14, face = "bold"),
+    aspect.ratio = 1
+  ) +
+  stat_compare_means(
+    method = "wilcox.test",
+    paired = T,
+    comparisons = mycomparisons,
+    p.adjust.methods = "bonferroni",
+    size = 3,
+    label = "p.format"
+  )+
+  NoLegend()
+
+ggsave("E6B.pdf", plot = p70, path = path_fig, height = 3.5, width = 18, device = "pdf")
+
+
+#Align 2 rows of plots
+g1 <- ggplotGrob(p69)
+g2 <- ggplotGrob(p70)
+# Make widths of facet columns match
+g1$widths <- g2$widths
+combined <- rbind(g1, g2, size = "first")
+# Save to PDF
+pdf(paste0(path_fig, "E6A and B.pdf"), width = 18, height = 7)
+grid.draw(combined)
+dev.off()
+```
+
+##E6C UMAPs NK expression CXCR5 and CX3CR1
+```{r}
+features = c("CXCR5", "CX3CR1")    
+plots <- lapply(seq_along(features), function(i) {
+  gene <- features[i]
+  p <- FeaturePlot(scNKcovid, features = gene, reduction = "umap")+
+    ggtitle(bquote(italic(.(gene))))+
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          aspect.ratio = 1)+
+    labs(x = "UMAP 1",
+         y = "UMAP 2")
+  if (i != length(features)) {
+    p <- p + theme(legend.position = "none")
+  }
+  return(p)
+})
+
+p71 = wrap_plots(plots, ncol = 2)
+ggsave("E6C.pdf", plot = p71, path = path_fig, height = 2.5, width = 5)
+
+
+```
+##E6D Boxplots of CX3CR1 and CXCR5
+```{r}
+#Extended Data Table 5, Tab Figure 7E and Extended 6I
+table_markers = read_xlsx('Source_Data_Extended_Data_Figure_6.xlsx', sheet = "E6D") %>% 
+  as.data.frame(table_markers) %>% 
+  pivot_longer(cols = -c(Donor, Condition))
+
+table_markers$Condition = table_markers$Condition %>% 
+  mapvalues(from = c("IFNa"), to = c("IFNα")) %>%
+  factor(levels = c("Unstim", "IFNα"))
+
+stim.cols = met.brewer("Hiroshige", n = 12)
+stim.cols = c(stim.cols[9], stim.cols[2])
+names(stim.cols) = c("Unstim", "IFNα")
+mycomparisons = list(c("Unstim", "IFNα"))
+
+
+
+table_keep = table_markers 
+
+table_keep$name = mapvalues(table_keep$name, from = c("CXCR5 MFI (CD56 Bright)","CX3CR1 MFI (CD56 Bright)", "CX3CR1 MFI (CD56dim CD16high)", "CXCR5 MFI (CD56dim CD16 low)", "CX3CR1 MFI (CD56dim CD16 low)"), to = c("CXCR5 MFI\n(CD56 Bright)","CX3CR1 MFI\n(CD56 Bright)", "CX3CR1 MFI\n(CD56dim CD16high)", "CXCR5 MFI\n(CD56dim CD16 low)", "CX3CR1 MFI\n(CD56dim CD16 low)"))
+
+table_keep$name = factor(table_keep$name, levels = c(
+  "CX3CR1 MFI\n(CD56 Bright)",
+  "CX3CR1 MFI\n(CD56dim CD16high)",
+    "CX3CR1 MFI\n(CD56dim CD16 low)",
+  "CXCR5 MFI\n(CD56 Bright)",
+  "CXCR5 MFI\n(CD56dim CD16 low)"
+
+))
+
+p72 = ggplot(table_keep, aes(x = Condition, y = value, color = Condition))  +
+  geom_point(size = 3) +
+  facet_wrap( ~ name, scales = "free_y", ncol = 5)+
+  geom_line(aes(group = Donor), color = "grey", alpha = 0.5) +
+  geom_boxplot(aes(fill = Condition),
+               alpha = 0.3,
+               outlier.shape = NA) +
+  theme_classic()+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13))) +
+  labs(y = "MFI") +
+  scale_color_manual(values = stim.cols) +
+  scale_fill_manual(values = stim.cols) +
+  theme(
+    axis.text = element_text(size = 12, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_text(face = "bold", size = 10),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 14),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 11),
+    aspect.ratio = 1,
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  stat_compare_means(
+    method = "wilcox.test",
+    paired = T,
+    comparisons = mycomparisons,
+    p.adjust.methods = "bonferroni",
+    size = 4,
+    label = "p.format"
+  ) +
+  NoLegend()
+
+ggsave("E6D.pdf", plot = p72, path = path_fig, height = 3, width = 10, device = "pdf")
+
+
+
+```
+
+
+
+
+
+#Extended Data Figure 7
+##E7A Venn Diagram DEGs
+```{r}
+path_fig = 'Extended 7/'
+deg_delta = FindMarkers(scNKcovid, ident.1 = "Non-Neutralizer", ident.2 = "Delta Neutralizer", group.by = "Delta", assay = "RNA", slot = "data", test.use = "wilcox")
+remove = rownames(deg_delta)[grep("^MT|^HB|^RP|^IG", rownames(deg_delta))]
+deg_delta = deg_delta[!(rownames(deg_delta) %in% remove),]
+deg_delta$Gene = rownames(deg_delta)
+deg_delta = subset(deg_delta, p_val_adj < 5e-2)
+
+
+scNKcovid_subset = subset(scNKcovid, subset = Score != 3)
+deg_NK_exclude  = FindMarkers(scNKcovid_subset, ident.1 = "Narrow", ident.2 = "Broad", group.by = "Breadth", assay = "RNA", slot = "data", test.use = "wilcox")
+#remove hb and mt genes
+remove = rownames(deg_NK_exclude)[grep("^MT|^HB|^RP|^IG", rownames(deg_NK_exclude))]
+deg_NK_exclude = deg_NK_exclude[!(rownames(deg_NK_exclude) %in% remove),]
+deg_NK_exclude$Gene = rownames(deg_NK_exclude)
+deg_NK_exclude = subset(deg_NK_exclude, p_val_adj < 5e-2)
+
+
+
+deg_conserved  = FindMarkers(scNKcovid, ident.1 = "Narrow", ident.2 = "Broad", group.by = "Breadth", assay = "RNA", slot = "data", test.use = "wilcox")
+#remove hb and mt genes
+remove = rownames(deg_conserved)[grep("^MT|^HB|^RP|^IG", rownames(deg_conserved))]
+deg_conserved = deg_conserved[!(rownames(deg_conserved) %in% remove),]
+deg_conserved$Gene = rownames(deg_conserved)
+for (i in unique (scNKcovid$Donor)){
+  scNKcovid_i <- subset(scNKcovid, subset = Donor != i)
+  DEG_i = FindMarkers(scNKcovid_i, ident.1 = "Narrow", ident.2 = "Broad", group.by = "Breadth", assay = "RNA", slot = "data", test.use = "wilcox")
+  remove = rownames(DEG_i)[grep("^MT|^HB|^RP|^IG", rownames(DEG_i))]
+  DEG_i = DEG_i[!(rownames(DEG_i) %in% remove),]
+  DEG_i$Gene = rownames(DEG_i)
+  deg_conserved <- deg_conserved[deg_conserved$Gene %in% DEG_i$Gene, ]
+}
+
+network_deg = names(logFC_NK)
+venn.col <- met.brewer("Isfahan2", 5)
+
+venn.diagram(
+  x = list(
+    deg_NK$Gene,
+    network_deg,
+    deg_delta$Gene,
+    deg_NK_exclude$Gene,
+    deg_conserved$Gene
+  ),
+  category.names = c(
+    "DEGs all \n NK cells",
+    "DEGs Protein-Protein \n Interactions" ,
+    "DEGs Delta \n Neutralizers",
+    "DEGs excluding \n Score = 3",
+    "DEGs conserved \n in LOO"
+  ),
+  filename = paste0(path_fig, "E7A.png"),
+  output = T,
+  imagetype = "png",
+  resolution = 300,
+  height = 1800 ,
+  width = 1800 ,
+  fill = venn.col,
+  compression = "lzw",
+  lty = 'blank',
+  fontface = "bold",
+  fontfamily = "sans",
+  cat.fontface = "bold",
+  cat.default.pos = "outer",
+  cat.fontfamily = "sans",
+  cat.pos = c(-45, -90, 135, 135, 90),
+  margin = .3)
+
+```
+
+##E7B Volcano Plot DEG Overlap
+```{r}
+
+labels = Reduce(intersect, list(network_deg, deg_delta$Gene, deg_NK_subset$Gene, deg_conserved$Gene))
+
+keyvals <- ifelse(
+    (deg_NK$avg_log2FC < -.25 & deg_NK$p_val_adj<10e-6) , '#75bca9'  ,
+      ifelse((deg_NK$avg_log2FC > .25 & deg_NK$p_val_adj<10e-6), '#ef7923',
+        'grey'))
+keyvals[is.na(keyvals)] <- 'black'
+names(keyvals)[keyvals == '#75bca9'] <- 'Up in Broad'
+names(keyvals)[keyvals == 'grey'] <- "Log2FC only"
+names(keyvals)[keyvals == '#ef7923'] <- 'Up in Narrow'
+p73 = EnhancedVolcano(deg_NK, x = "avg_log2FC", 
+                      y = "p_val_adj", lab = deg_NK$Gene, 
+                      selectLab = labels, 
+                      FCcutoff = .25, 
+                      xlim = c(-2,2), 
+                      colCustom = keyvals,
+                      labSize = 5.5, 
+                      colAlpha = .8,
+                      labFace = "italic", 
+                      boxedLabels = F, 
+                      drawConnectors = T, 
+                      ylim = c(0,100),
+                      max.overlaps = Inf, 
+                      arrowheads = F, 
+                      title = NULL, 
+                      subtitle = NULL, 
+                      caption = NULL)+
+  theme(axis.title = element_text(size = 24))
+ggsave("E7B.pdf", plot = p73, device = "pdf", path = path_fig, height = 6, width = 8)
+```
+#Supplementary Data Figure 1
+##S1A UMAP by Donor scRNAseq
+```{r}
+path_fig = 'Supplementary 1/'
+
+healthy.cols = moma.colors("Clay", n = 8, type = "continuous")
+names(healthy.cols) = c("HIP002", "HIP015", "HIP022", "HIP023", "HIP043", "HIP044", "HIP045", "HIP046")
+donor.cols = moma.colors("Warhol", n = 30, type = "continuous")
+names(donor.cols) = unique(scPBMCcovid$Donor)
+cols = c(donor.cols, healthy.cols)
+
+p74 = DimPlot(
+  scPBMC,
+  group.by = "Donor",
+  reduction = "umap",
+  raster = F,
+  cols = cols,
+  label = F,
+  repel = T
+) + labs(x = "UMAP1", y = "UMAP2") + theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title = element_text(size = 20),
+  aspect.ratio = 1,
+  title = element_text(size = 20)
+) + ggtitle("scRNAseq Donors")
+p47$layers[[1]]$aes_params$alpha = .3
+p47 = p47 + guides(colour = guide_legend(override.aes = list(alpha = 1, size =3))) 
+ggsave("S1A.pdf", plot = p74, device = "pdf", path = path_fig, height = 5, width = 8)
+```
+##S1B UMAP by Donor CyTOF
+```{r}
+healthy.cols = moma.colors("Dali", n = 6, type = "continuous")
+names(healthy.cols) = c("01VWT063-15A", "01VWT206_15A", "01VWT115-15A", "01VWT286-15A",
+                        "01VWT341_15A", "01VWT217_15A")
+
+cols = c(cols, healthy.cols)
+
+p75 = DimPlot(
+  cyPBMC,
+  group.by = "patient_id",
+  reduction = "umapraw",
+  raster = T,
+  cols = cols,
+  label = F,
+  repel = T
+) + labs(x = "UMAP1", y = "UMAP2") + theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title = element_text(size = 20),
+  title = element_text(size = 20),
+  aspect.ratio = 1
+) + ggtitle("cyTOF Donors")
+p48$layers[[1]]$aes_params$alpha = .3
+p48 = p48+guides(colour = guide_legend(override.aes = list(alpha = 1,size=3))) 
+ggsave("S1B.pdf", plot = p75, device = "pdf", path = path_fig, height = 5, width = 7.5)
+```
+##S1C UMAP NK cells by donor
+```{r}
+donor.cols = moma.colors("Warhol", n = 30, type = "continuous")
+names(donor.cols) = unique(scPBMCcovid$Donor)
+
+p76 = DimPlot(
+  scNKcovid,
+  group.by = "Donor",
+  reduction = "umap",
+  raster = F,
+  cols = donor.cols,
+  label = F,
+  repel = T
+) + labs(x = "UMAP1", y = "UMAP2") + theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title = element_text(size = 20),
+  aspect.ratio = 1,
+  title = element_text(size = 20)
+) + ggtitle("scRNAseq Donors (NK Cells)")
+
+ggsave("E1C.pdf", plot = p76, device = "pdf", path = path_fig, height = 5, width = 8
+)
+
+```
+
+
+##S1D Boxplot of Age
+```{r}
+meta = scPBMC@meta.data %>%
+  select(Donor, Breadth, Severity.max.final, acuity, Age) %>%
+  unique()
+meta$Breadth = factor(meta$Breadth, levels = c("Healthy", "Narrow", "Broad"))
+
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+p77 = ggboxplot(meta, x = "Breadth", y = "Age", add = "jitter", 
+                palette = severity.cols, 
+                add.params = list(color = "Severity.max.final",
+                                  shape = "acuity",
+                                  size = 3))+
+  labs(y = "Age", x = "Breadth Group")+ 
+  guides(color = guide_legend("Severity", override.aes = aes(label = "")), 
+         shape = guide_legend("Acuity", override.aes = aes(label = "")))+ 
+  theme( strip.text = element_text(face = "bold"),
+         axis.text = element_text(color = "black", size = 18),
+         axis.title.x = element_blank(),
+         legend.title = element_text(face = "bold", size = 16),
+         legend.text = element_text(size = 14),
+         axis.text.x = element_text(angle = 45, hjust = 1, size =12),
+         axis.title.y = element_text(size = 18, face = "bold"))+
+  NoLegend()
+
+ggsave("S1D.pdf", plot = p77, device = "pdf", path = path_fig, height = 4, width =3.5)
+```
+##E1E Barplot Ethnicity
+```{r}
+
+meta = scPBMCcovid@meta.data %>%
+  select(Donor, CANONICAL_ETHNICITY, CANONICAL_RACE, Breadth) %>%
+  unique()
+meta$Breadth = factor(meta$Breadth, levels = c("Healthy", "Narrow", "Broad"))
+
+
+ethnicity_perc <- meta %>%
+  group_by(Breadth, CANONICAL_ETHNICITY) %>%
+  summarise(count = n()) %>%
+  group_by(Breadth) %>%
+  mutate(percent = count / sum(count) * 100) %>%
+  ungroup()
+
+# Plot the stacked barplot for ethnicity faceted by the "breadth" variable
+p78 = ggplot(ethnicity_perc, aes(x = "", y = percent, fill = CANONICAL_ETHNICITY)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = moma.colors("Lupi", 3))+
+  labs(x = NULL, y = "Cumulative Percent", fill = "Ethnicity") +
+  facet_wrap(~ Breadth) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text  = element_text(size =18, face = "bold"),
+        axis.text.x = element_text(size = 12, color = "black"))
+ggsave("S1E.pdf", plot = p78, device = "pdf", path = path_fig, height = 3, width = 5)
+```
+##S1F Barplots Race
+```{r}
+
+race_perc <- meta %>%
+  group_by(Breadth, CANONICAL_RACE) %>%
+  summarise(count = n()) %>%
+  group_by(Breadth) %>%
+  mutate(percent = count / sum(count) * 100) %>%
+  ungroup()
+
+# Plot the stacked barplot for ethnicity faceted by the "breadth" variable
+p79 = ggplot(race_perc, aes(x = "", y = percent, fill = CANONICAL_RACE)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = met.brewer("Signac", 6)[2:6])+
+  labs(x = NULL, y = "Cumulative Percent", fill = "Race") +
+  facet_wrap(~ Breadth) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text  = element_text(size =18, face = "bold"),
+        axis.text.x = element_text(size = 12, color = "black"))
+ggsave("S1F.pdf", plot = p79, device = "pdf", path = path_fig, height = 3, width =4)
+
+```
+##S1G Barplot Sex
+```{r}
+
+meta = scPBMC@meta.data %>%
+  select(Donor, Sex, Breadth) %>%
+  unique()
+meta$Breadth = factor(meta$Breadth, levels = c("Healthy", "Narrow", "Broad"))
+
+sex_perc <- meta %>%
+  group_by(Breadth, Sex) %>%
+  summarise(count = n()) %>%
+  group_by(Breadth) %>%
+  mutate(percent = count / sum(count) * 100) %>%
+  ungroup()
+
+# Plot the stacked barplot for ethnicity faceted by the "breadth" variable
+p80 = ggplot(sex_perc, aes(x = "", y = percent, fill = Sex)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = moma.colors("Koons", 2))+
+  labs(x = NULL, y = "Cumulative Percent", fill = "Sex") +
+  facet_wrap(~ Breadth) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text  = element_text(size =18, face = "bold"),
+        axis.text.x = element_text(size = 12, color = "black"))
+
+#grid3 = plot_grid(plotlist = list(p53, p54), ncol = 2)
+ggsave("S1G.pdf", plot = p80, device = "pdf", path = path_fig, height = 3, width = 4)
+
+
+```
+
+#Supplementary Figure 2
+##S2A Boxplots B cellsubsets proportion of B cells
+```{r}
+path_fig = '/Users/izumidk2/Library/CloudStorage/GoogleDrive-izumidk@stanford.edu/.shortcut-targets-by-id/0B5PFTPY_3B9MdkpncmIzRW43UEk/Blish Lab/00 - All Server Data and Folders/Izumi/Papers/COVID/Final Submission/Figures/Supplementary 2/'
+B.cell = colnames(scPBMC)[grep("^B|Plasmablast",scPBMC$celltype.l2)]
+scB = subset(scPBMC, cells = B.cell)
+
+#get celltupe info
+scB$Breadth = factor(scB$Breadth, levels = c("Healthy", "Narrow", "Broad"))
+scB$celltype.l2 = mapvalues(scB$celltype.l2, from = c("B naive", "B intermediate", "B memory", "Plasmablast"), 
+                            to = c("B Naive", "B Intermediate", "B Memory", "Plasmablast"))
+scB$celltype.l2 = factor(scB$celltype.l2, levels = c("B Naive", "B Intermediate", "B Memory", "Plasmablast"))
+
+meta.use = scB@meta.data%>%
+  select(Donor, Breadth, Severity.max.final, celltype.l2, acuity)
+meta.use$cell.type <- meta.use$celltype.l2
+meta.use$cell.type = factor(meta.use$cell.type, levels = c("B Naive", "B Intermediate", "B Memory", "Plasmablast"))
+#meta.use$cell.type <- as.character(meta.use$cell.type)
+
+breadth.cols = moma.colors("Smith", n = 3)
+names(breadth.cols) = c("Narrow", "Broad", "Healthy")
+
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+
+#cell type proportion plot
+p81 = propPlot(
+  meta.use,
+  group_by = "Breadth",
+  ncol = 4,
+  by = "cell.type",
+  each.pt = "Donor",
+  label = "p.format"
+) +
+  labs(y = "Proportion of B (%)") +
+  NoLegend() +
+  theme(axis.text.x = element_text(angle = 0, size = 11),
+        axis.title = element_text(face = "bold", size = 14),
+        strip.text = element_text(size = 14))
+
+ggsave("S2A.pdf", plot = p81, device = "pdf", path = path_fig, height = 3, width = 10, dpi = 300)
+
+```
+##S2B Boxplots B cellsubsets proportion of PBMC
+```{r}
+meta = scPBMC@meta.data
+cell_counts = meta %>%
+  group_by(!!sym("Donor")) %>%
+  summarise(
+    total_cells = n(),
+    PB = sum(!!sym("celltype.l2") == "Plasmablast"),
+    mem = sum(!!sym("celltype.l2") == "B memory"),
+    naive = sum(!!sym("celltype.l2") == "B naive"),
+    int = sum(!!sym("celltype.l2") == "B intermediate"),
+    B_total = sum(!!sym("manual.coarse.idents") == "B")
+  ) %>%
+  mutate(
+    Plasmablast = 100 * PB / total_cells,
+    `B Memory` = 100 * mem / total_cells,
+    `B Naive` = 100 * naive / total_cells,
+    `B Intermediate` = 100 * int / total_cells,
+    `Total B` = 100 * B_total / total_cells
+  )
+
+meta_add = meta %>%
+  as.data.frame() %>%
+  dplyr::select(Severity.max.final, acuity, Donor, Breadth) %>% 
+  unique()
+cell_counts = left_join(cell_counts, meta_add, by = "Donor")
+
+cell_counts = cell_counts %>%
+  select(Donor, Plasmablast, `B Memory`, `B Naive`, `B Intermediate`, `Total B`, Severity.max.final, acuity, Breadth) %>%
+  pivot_longer(
+    cols = -c(Donor, Severity.max.final, acuity, Breadth),
+    names_to = "B_type",
+    values_to = "percent_b"
+  )
+cell_counts$B_type = factor(cell_counts$B_type, levels = c("B Naive","B Intermediate","B Memory", "Plasmablast","Total B"))
+
+cell_counts$Breadth = factor(cell_counts$Breadth, levels = c("Healthy", "Narrow", "Broad"))
+severity.cols = moma.colors("ustwo", n = 5)
+names(severity.cols) = c("8", "6-7", "4-5", "1-3", "0")
+my_comparisons.current = list (c("Narrow", "Broad"), c("Narrow", "Healthy"), c("Broad", "Healthy"))
+
+p82 = ggboxplot(
+  cell_counts,
+  x = "Breadth",
+  y = "percent_b",
+  add = "jitter",
+  palette = severity.cols,
+  add.params = list(
+    color = "Severity.max.final",
+    shape = "acuity",
+    size = 4
+  )
+) +
+  facet_wrap(~B_type, ncol = 5, scales = "free_y")+
+  stat_compare_means(
+    method = "wilcox",
+    comparisons = my_comparisons.current,
+    position = "dodge",
+    label = "p.format",
+    vjust = .1,
+    size = 6
+  ) +
+  theme_bw() +
+  labs(y = "B Cell Subset\n(% of PBMC)", x = "Breadth Group") +
+  guides(
+    color = guide_legend("Severity", override.aes = aes(label = "")),
+    shape = guide_legend("Acuity", override.aes = aes(label = ""))
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.13)))+
+  theme(
+    strip.text = element_text(face = "bold", size = 18),
+    axis.text = element_text(color = "black", size = 12),
+    axis.title = element_text(
+      color = "black",
+      face = "bold",
+      size = 18
+    ),
+    legend.title = element_text(face = "bold", size = 16),
+    legend.text = element_text(size = 14),
+    aspect.ratio = 1,
+    strip.background = element_blank(),
+    axis.text.y = element_text(size = 18),
+    axis.text.x = element_text(size = 12)
+  )+NoLegend()
+
+ggsave("S2B.pdf", plot = p83, device = "pdf", path = path_fig, height = 4, width = 15)
+
+```
+
+
+
+R version 4.2.2 (2022-10-31)
+Platform: x86_64-apple-darwin17.0 (64-bit)
+Running under: macOS 15.0
+
+Matrix products: default
+LAPACK: /Library/Frameworks/R.framework/Versions/4.2/Resources/lib/libRlapack.dylib
+
+locale:
+[1] en_US.UTF-8/en_US.UTF-8/en_US.UTF-8/C/en_US.UTF-8/en_US.UTF-8
+
+attached base packages:
+ [1] parallel  stats4    grid      stats     graphics  grDevices utils     datasets  methods   base     
+
+other attached packages:
+ [1] multinichenetr_1.0.1        PNWColors_0.1.0             CytoTRACE2_1.0.0           
+ [4] Rfast_2.1.0                 RcppParallel_5.1.7          RcppZiggurat_0.1.6         
+ [7] Rcpp_1.0.11                 RANN_2.6.1                  HiClimR_2.2.1              
+[10] doParallel_1.0.17           iterators_1.0.14            foreach_1.5.2              
+[13] ComplexUpset_1.3.3          DESeq2_1.38.3               magrittr_2.0.3             
+[16] reticulate_1.34.0           tidygraph_1.2.3             ggraph_2.1.0               
+[19] intergraph_2.0-3            sna_2.7-1                   statnet.common_4.9.0       
+[22] network_1.18.1              BioNet_1.58.0               RBGL_1.74.0                
+[25] graph_1.76.0                viridis_0.6.4               viridisLite_0.4.2          
+[28] MoMAColors_0.0.0.9000       NatParksPalettes_0.2.0      STRINGdb_2.10.1            
+[31] EnhancedVolcano_1.16.0      ggrepel_0.9.4               SingleCellExperiment_1.20.1
+[34] SummarizedExperiment_1.28.0 Biobase_2.58.0              GenomicRanges_1.50.2       
+[37] GenomeInfoDb_1.34.9         IRanges_2.32.0              S4Vectors_0.36.2           
+[40] BiocGenerics_0.44.0         MatrixGenerics_1.10.0       matrixStats_1.0.0          
+[43] nichenetr_2.1.5             data.table_1.14.8           cowplot_1.1.1              
+[46] openxlsx_4.2.5.2            circlize_0.4.15             ComplexHeatmap_2.14.0      
+[49] igraph_1.5.1                sctransform_0.4.0           SeuratObject_4.1.4         
+[52] Seurat_4.4.0                plyr_1.8.9                  Matrix_1.6-1.1             
+[55] ggpubr_0.6.0                MetBrewer_0.3.0             readxl_1.4.3               
+[58] lubridate_1.9.3             forcats_1.0.0               stringr_1.5.0              
+[61] purrr_1.0.2                 readr_2.1.4                 tidyr_1.3.0                
+[64] tibble_3.2.1                ggplot2_3.4.4               tidyverse_2.0.0            
+[67] dplyr_1.1.4                
+
+loaded via a namespace (and not attached):
+  [1] TMB_1.9.6                 graphlayouts_1.0.1        pbapply_1.7-2            
+  [4] lattice_0.21-9            vctrs_0.6.4               mgcv_1.9-0               
+  [7] blob_1.2.4                survival_3.5-7            prodlim_2023.08.28       
+ [10] spatstat.data_3.0-1       later_1.3.1               nloptr_2.0.3             
+ [13] DBI_1.1.3                 uwot_0.1.16               gsubfn_0.7               
+ [16] dqrng_0.3.1               zlibbioc_1.44.0           htmlwidgets_1.6.2        
+ [19] mvtnorm_1.2-3             GlobalOptions_0.1.2       future_1.33.0            
+ [22] UpSetR_1.4.0              leiden_0.4.3              pbkrtest_0.5.2           
+ [25] scater_1.26.1             irlba_2.3.5.1             KernSmooth_2.23-22       
+ [28] promises_1.2.1            DelayedArray_0.24.0       limma_3.54.2             
+ [31] locfdr_1.1-8              Hmisc_5.1-1               muscat_1.12.1            
+ [34] RhpcBLASctl_0.23-42       digest_0.6.33             png_0.1-8                
+ [37] bluster_1.8.0             ncdf4_1.22                pkgconfig_2.0.3          
+ [40] spatstat.random_3.1-6     ggnewscale_0.4.9          DelayedMatrixStats_1.20.0
+ [43] gower_1.0.1               ggbeeswarm_0.7.2          estimability_1.4.1       
+ [46] minqa_1.2.6               beeswarm_0.4.0            GetoptLong_1.0.5         
+ [49] xfun_0.40                 zoo_1.8-12                tidyselect_1.2.0         
+ [52] reshape2_1.4.4            ica_1.0-3                 rlang_1.1.1              
+ [55] glue_1.6.2                RColorBrewer_1.1-3        variancePartition_1.28.9 
+ [58] factoextra_1.0.7          emmeans_1.8.8             lava_1.7.2.1             
+ [61] sva_3.46.0                ggsignif_0.6.4            recipes_1.0.8            
+ [64] labeling_0.4.3            httpuv_1.6.11             class_7.3-22             
+ [67] BiocNeighbors_1.16.0      TH.data_1.1-2             annotate_1.76.0          
+ [70] jsonlite_1.8.7            XVector_0.38.0            bit_4.0.5                
+ [73] mime_0.12                 gridExtra_2.3             gplots_3.1.3             
+ [76] stringi_1.7.12            spatstat.sparse_3.0-2     scattermore_1.2          
+ [79] spatstat.explore_3.2-3    rbibutils_2.2.15          hardhat_1.3.0            
+ [82] bitops_1.0-7              cli_3.6.1                 Rdpack_2.5               
+ [85] sqldf_0.4-11              RSQLite_2.3.1             randomForest_4.7-1.1     
+ [88] timechange_0.2.0          rstudioapi_0.15.0         nlme_3.1-163             
+ [91] scran_1.26.2              locfit_1.5-9.8            listenv_0.9.0            
+ [94] miniUI_0.1.1.1            lifecycle_1.0.3           timeDate_4022.108        
+ [97] munsell_0.5.0             cellranger_1.1.0          visNetwork_2.1.2         
+[100] caTools_1.18.2            codetools_0.2-19          coda_0.19-4              
+[103] vipor_0.4.5               lmtest_0.9-40             htmlTable_2.4.1          
+[106] proto_1.0.0               xtable_1.8-4              ROCR_1.0-11              
+[109] abind_1.4-5               farver_2.1.1              parallelly_1.36.0        
+[112] RcppAnnoy_0.0.21          goftest_1.2-3             patchwork_1.1.3          
+[115] cluster_2.1.4             future.apply_1.11.0       ellipsis_0.3.2           
+[118] prettyunits_1.2.0         ggridges_0.5.4            lmerTest_3.1-3           
+[121] glmmTMB_1.1.8             spatstat.utils_3.0-3      htmltools_0.5.6.1        
+[124] yaml_2.3.7                hash_2.2.6.3              utf8_1.2.3               
+[127] plotly_4.10.2             XML_3.99-0.14             ModelMetrics_1.2.2.2     
+[130] e1071_1.7-13              foreign_0.8-85            withr_2.5.1              
+[133] scuttle_1.8.4             fitdistrplus_1.1-11       BiocParallel_1.32.6      
+[136] bit64_4.0.5               multcomp_1.4-25           Biostrings_2.66.0        
+[139] progressr_0.14.0          rsvd_1.0.5                ScaledMatrix_1.6.0       
+[142] memoise_2.0.1             evaluate_0.22             geneplotter_1.76.0       
+[145] tzdb_0.4.0                caret_6.0-94              DiagrammeR_1.0.10        
+[148] fdrtool_1.2.17            fansi_1.0.5               tensor_1.5               
+[151] edgeR_3.40.2              checkmate_2.2.0           aod_1.3.2                
+[154] cachem_1.0.8              remaCor_0.0.16            deldir_1.0-9             
+[157] metapod_1.6.0             rjson_0.2.21              rstatix_0.7.2            
+[160] clue_0.3-65               tools_4.2.2               sandwich_3.0-2           
+[163] RCurl_1.98-1.12           proxy_0.4-27              car_3.1-2                
+[166] httr_1.4.7                rmarkdown_2.25            boot_1.3-28.1            
+[169] globals_0.16.2            R6_2.5.1                  nnet_7.3-19              
+[172] progress_1.2.2            genefilter_1.80.3         KEGGREST_1.38.0          
+[175] gtools_3.9.4              shape_1.4.6               statmod_1.5.0            
+[178] ggstream_0.1.0            beachmat_2.14.2           BiocSingular_1.14.0      
+[181] splines_4.2.2             carData_3.0-5             colorspace_2.1-0         
+[184] generics_0.1.3            base64enc_0.1-3           chron_2.3-61             
+[187] pillar_1.9.0              tweenr_2.0.2              sp_2.1-1                 
+[190] GenomeInfoDbData_1.2.9    gtable_0.3.4              zip_2.3.0                
+[193] knitr_1.44                shadowtext_0.1.3          fastmap_1.1.1            
+[196] EnvStats_2.8.1            AnnotationDbi_1.60.2      broom_1.0.5              
+[199] scales_1.2.1              backports_1.4.1           plotrix_3.8-2            
+[202] ipred_0.9-14              lme4_1.1-34               blme_1.0-5               
+[205] hms_1.1.3                 ggforce_0.4.1             Rtsne_0.16               
+[208] shiny_1.7.5.1             polyclip_1.10-6           numDeriv_2016.8-1.1      
+[211] lazyeval_0.2.2            Formula_1.2-5             crayon_1.5.2             
+[214] MASS_7.3-60               pROC_1.18.4               sparseMatrixStats_1.10.0 
+[217] rpart_4.1.21              compiler_4.2.2            spatstat.geom_3.2-5      
